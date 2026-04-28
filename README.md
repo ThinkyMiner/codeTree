@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/thinkyminer-codetree-badge.png)](https://mseep.ai/app/thinkyminer-codetree)
+
 # codetree
 
 [![Tests](https://github.com/ThinkyMiner/codeTree/actions/workflows/test.yml/badge.svg)](https://github.com/ThinkyMiner/codeTree/actions/workflows/test.yml)
