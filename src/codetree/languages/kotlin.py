@@ -178,7 +178,7 @@ class KotlinPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(import_header) @imp")
+        q = Query(_LANGUAGE, "(import) @imp")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
