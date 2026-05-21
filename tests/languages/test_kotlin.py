@@ -81,3 +81,13 @@ def test_extract_calls_in_function():
 def test_extract_symbol_usages():
     usages = PLUGIN.extract_symbol_usages(SAMPLE, "Calculator")
     assert len(usages) >= 2  # Definition + instantiation
+
+
+def test_kts_support():
+    kts_sample = b"""
+    fun buildConfig() {
+        println("building...")
+    }
+    """
+    result = PLUGIN.extract_skeleton(kts_sample)
+    assert any(x["name"] == "buildConfig" for x in result)

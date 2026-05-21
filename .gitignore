@@ -9,6 +9,7 @@ build/
 # Virtual environments
 .venv/
 venv/
+uv.lock
 
 # Testing
 .pytest_cache/

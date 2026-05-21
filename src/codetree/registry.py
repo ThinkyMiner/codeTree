@@ -31,6 +31,7 @@ PLUGINS: dict[str, LanguagePlugin] = {
     ".hh":   CppPlugin(),
     ".rb":   RubyPlugin(),
     ".kt":   KotlinPlugin(),
+    ".kts":  KotlinPlugin(),
 }
 
 

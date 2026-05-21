@@ -11,7 +11,7 @@ def _parse(source: bytes):
 
 
 class KotlinPlugin(LanguagePlugin):
-    extensions = (".kt",)
+    extensions = (".kt", ".kts")
 
     def extract_skeleton(self, source: bytes) -> list[dict]:
         tree = _parse(source)
