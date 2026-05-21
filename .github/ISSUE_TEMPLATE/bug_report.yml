@@ -71,6 +71,7 @@ body:
         - C
         - C++
         - Ruby
+        - Kotlin
         - Not language-specific
     validations:
       required: false

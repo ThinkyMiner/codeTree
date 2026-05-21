@@ -7,7 +7,7 @@
 
 **Stop feeding entire files to your AI agent.**
 
-codetree is an [MCP](https://modelcontextprotocol.io/) server that gives coding agents structured code understanding via [tree-sitter](https://tree-sitter.github.io/) — so they ask precise questions instead of reading thousands of lines. 23 tools, 10 languages, ~1 second startup. No vector DB, no embedding model, no config.
+codetree is an [MCP](https://modelcontextprotocol.io/) server that gives coding agents structured code understanding via [tree-sitter](https://tree-sitter.github.io/) — so they ask precise questions instead of reading thousands of lines. 23 tools, 11 languages, ~1 second startup. No vector DB, no embedding model, no config.
 
 ## Quick Start
 
@@ -152,6 +152,7 @@ The agent sees every class, method, and docstring — with line numbers — with
 | C | `.c`, `.h` |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh` |
 | Ruby | `.rb` |
+| Kotlin | `.kt` |
 
 ## Editor Setup
 

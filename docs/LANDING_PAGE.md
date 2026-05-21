@@ -190,7 +190,7 @@ cls Calculator:4 # A scientific calculator.
 
 ## 6. Supported Languages
 
-10 languages. 16 file extensions. All backed by official tree-sitter grammars. Plus a persistent graph layer for onboarding, change impact, and security analysis.
+11 languages. 17 file extensions. All backed by official tree-sitter grammars. Plus a persistent graph layer for onboarding, change impact, and security analysis.
 
 | Language | Extensions |
 |----------|-----------|
@@ -204,6 +204,7 @@ cls Calculator:4 # A scientific calculator.
 | C | `.c` `.h` |
 | C++ | `.cpp` `.cc` `.cxx` `.hpp` `.hh` |
 | Ruby | `.rb` |
+| Kotlin | `.kt` |
 
 Adding a new language is mechanical: copy a template file, implement 5 methods, register in one file, done.
 
@@ -308,7 +309,7 @@ claude mcp add codetree -- uvx --from mcp-server-codetree codetree --root .
 ┌─────────────────────────────────────────────────┐
 │  Language Plugins (one per language)             │
 │                                                 │
-│  Python │ JS │ TS │ Go │ Rust │ Java │ C │ C++ │ Ruby │
+│  Python │ JS │ TS │ Go │ Rust │ Java │ C │ C++ │ Ruby │ Kotlin │
 │                                                 │
 │  Each implements:                               │
 │    extract_skeleton()                           │
@@ -335,8 +336,8 @@ claude mcp add codetree -- uvx --from mcp-server-codetree codetree --root .
 | Metric | Value |
 |--------|-------|
 | MCP tools | 23 |
-| Supported languages | 10 |
-| File extensions | 16 |
+| Supported languages | 11 |
+| File extensions | 17 |
 | Test count | 999 |
 | Startup time | ~1 second |
 | Install | `uvx --from mcp-server-codetree codetree` |
