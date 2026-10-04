@@ -82,6 +82,38 @@ class TestIndexerBuild:
         assert ".go" in exts
         assert ".rs" in exts
 
+    def test_skips_excluded_path(self, tmp_path):
+        (tmp_path / "app.py").write_text("def main(): pass")
+        vendored = tmp_path / "third_party" / "lib"
+        vendored.mkdir(parents=True)
+        (vendored / "util.py").write_text("def vendored_fn(): pass")
+        idx = Indexer(str(tmp_path), exclude=["third_party"])
+        idx.build()
+        assert list(idx._index) == ["app.py"]
+
+    def test_excluded_path_is_a_prefix_from_root(self, tmp_path):
+        for rel in ("docs/gen", "docs/generated", "src/docs/gen"):
+            d = tmp_path / rel
+            d.mkdir(parents=True)
+            (d / "mod.py").write_text("def fn(): pass")
+        idx = Indexer(str(tmp_path), exclude=["docs/gen/"])
+        idx.build()
+        assert sorted(idx._index) == ["docs/generated/mod.py", "src/docs/gen/mod.py"]
+
+    def test_exclude_accepts_absolute_path_under_root(self, tmp_path):
+        (tmp_path / "app.py").write_text("def main(): pass")
+        vendored = tmp_path / "third_party"
+        vendored.mkdir()
+        (vendored / "util.py").write_text("def vendored_fn(): pass")
+        idx = Indexer(str(tmp_path), exclude=[str(vendored)])
+        idx.build()
+        assert list(idx._index) == ["app.py"]
+
+    @pytest.mark.parametrize("bad", ["../elsewhere", "src/../third_party", "/outside/the/root"])
+    def test_exclude_rejects_path_it_cannot_match(self, tmp_path, bad):
+        with pytest.raises(ValueError, match="--exclude"):
+            Indexer(str(tmp_path), exclude=[bad])
+
     def test_skips_git_directory(self, tmp_path):
         (tmp_path / "app.py").write_text("def main(): pass")
         git = tmp_path / ".git" / "hooks"

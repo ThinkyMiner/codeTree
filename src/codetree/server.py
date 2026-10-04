@@ -1,10 +1,11 @@
+from collections.abc import Iterable
 from fastmcp import FastMCP
 from pathlib import Path
 from .indexer import Indexer
 from .cache import Cache
 
 
-def create_server(root: str) -> FastMCP:
+def create_server(root: str, exclude: Iterable[str] = ()) -> FastMCP:
     mcp = FastMCP("codetree")
     root_path = Path(root)
 
@@ -30,7 +31,7 @@ def create_server(root: str) -> FastMCP:
     cached_mtimes = {
         k: v["mtime"] for k, v in (cache._data or {}).items()
     }
-    indexer = Indexer(root)
+    indexer = Indexer(root, exclude=exclude)
     indexer.build(cached_mtimes=cached_mtimes)
 
     # Inject cached entries for unchanged files (skip ignored dirs)
@@ -762,6 +763,6 @@ def create_server(root: str) -> FastMCP:
     return mcp
 
 
-def run(root: str):
-    mcp = create_server(root)
+def run(root: str, exclude: Iterable[str] = ()):
+    mcp = create_server(root, exclude=exclude)
     mcp.run()

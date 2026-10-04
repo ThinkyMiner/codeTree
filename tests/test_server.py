@@ -342,3 +342,40 @@ class TestGetCallGraph:
         result = fn(file_path="models.py", function_name="get_user_by_email")
         # get_user_by_email is imported and potentially used in services.py
         assert "models.py" in result or "services.py" in result
+
+
+# ─── exclude ──────────────────────────────────────────────────────────────────
+
+class TestExclude:
+
+    def _repo(self, tmp_path):
+        (tmp_path / "app.py").write_text("def main(): pass\n")
+        vendored = tmp_path / "third_party" / "lib"
+        vendored.mkdir(parents=True)
+        (vendored / "util.py").write_text("def vendored_fn(): pass\n")
+        return tmp_path
+
+    def test_excluded_path_is_not_served(self, tmp_path):
+        repo = self._repo(tmp_path)
+        fn = _tool(create_server(str(repo), exclude=["third_party"]), "get_file_skeleton")
+        assert "main" in fn(file_path="app.py")
+        assert "File not found" in fn(file_path="third_party/lib/util.py")
+
+    def test_exclude_drops_previously_cached_file(self, tmp_path):
+        repo = self._repo(tmp_path)
+        fn = _tool(create_server(str(repo)), "get_file_skeleton")
+        assert "vendored_fn" in fn(file_path="third_party/lib/util.py")
+        fn = _tool(create_server(str(repo), exclude=["third_party"]), "get_file_skeleton")
+        assert "File not found" in fn(file_path="third_party/lib/util.py")
+
+    def test_cli_passes_exclude_to_run(self, tmp_path, monkeypatch):
+        import sys
+        import codetree.__main__ as cli
+        calls = []
+        monkeypatch.setattr(cli, "run", lambda root, exclude=(): calls.append((root, list(exclude))))
+        monkeypatch.setattr(sys, "argv", [
+            "codetree", "--root", str(tmp_path),
+            "--exclude", "third_party", "--exclude", "docs/gen",
+        ])
+        cli.main()
+        assert calls == [(str(tmp_path), ["third_party", "docs/gen"])]

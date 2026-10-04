@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 from .languages.base import LanguagePlugin
@@ -32,8 +33,10 @@ class Indexer:
         "setup", "teardown", "setUp", "tearDown",
     }
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, exclude: Iterable[str] = ()):
         self.root = Path(root)
+        # Root-relative path prefixes to skip, on top of SKIP_DIRS.
+        self._exclude: list[tuple[str, ...]] = [self._exclude_prefix(e) for e in exclude]
         self._index: dict[str, FileEntry] = {}
         self._definitions: dict[str, list[tuple[str, int]]] = {}
         # Keys are "rel_path::symbol_name" to prevent name collisions across files.
@@ -56,11 +59,33 @@ class Indexer:
         ".codetree",
     }
 
+    def _exclude_prefix(self, exclude: str) -> tuple[str, ...]:
+        """Normalize one --exclude value to path parts relative to the root.
+
+        A value that could never match an indexed path is an error, not a no-op.
+        """
+        path = Path(exclude)
+        if path.is_absolute():
+            try:
+                path = path.relative_to(self.root)
+            except ValueError:
+                raise ValueError(
+                    f"--exclude '{exclude}' is outside the repo root '{self.root}'"
+                ) from None
+        if not path.parts or ".." in path.parts:
+            raise ValueError(
+                f"--exclude '{exclude}' must name a path below the repo root, without '..'"
+            )
+        return path.parts
+
     def _should_skip(self, path: Path) -> bool:
         for part in path.parts:
             if part in self.SKIP_DIRS:
                 return True
             if part.endswith(".egg-info"):
+                return True
+        for prefix in self._exclude:
+            if path.parts[:len(prefix)] == prefix:
                 return True
         return False
 
