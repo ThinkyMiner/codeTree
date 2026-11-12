@@ -33,28 +33,26 @@ def create_server(root: str) -> FastMCP:
     indexer = Indexer(root)
     indexer.build(cached_mtimes=cached_mtimes)
 
-    # Inject cached entries for unchanged files (skip ignored dirs)
-    indexed = {str(f.relative_to(root_path)) for f in indexer.files}
-    for rel_path, entry_data in (cache._data or {}).items():
-        if indexer._should_skip(Path(rel_path)):
-            continue
-        if rel_path not in indexed:
-            py_file = root_path / rel_path
-            if py_file.exists():
-                mtime = py_file.stat().st_mtime
-                if cache.is_valid(rel_path, mtime):
-                    indexer.inject_cached(
-                        rel_path=rel_path,
-                        py_file=py_file,
-                        source=py_file.read_bytes(),
-                        skeleton=entry_data.get("skeleton", []),
-                        mtime=mtime,
-                    )
+    # Inject cached entries for unchanged files. Only files discovered by this
+    # build qualify, so stale cache entries (deleted or now-ignored files,
+    # e.g. old worktrees) are never resurrected.
+    for rel_path in indexer.cached_candidates:
+        py_file = root_path / rel_path
+        mtime = py_file.stat().st_mtime
+        if cache.is_valid(rel_path, mtime):
+            indexer.inject_cached(
+                rel_path=rel_path,
+                py_file=py_file,
+                source=py_file.read_bytes(),
+                skeleton=cache.get(rel_path).get("skeleton", []),
+                mtime=mtime,
+            )
 
     # Rebuild definition index once after all injections (DATA-01, DATA-02, DATA-03 fix)
     indexer._rebuild_definitions()
 
-    # Save updated cache
+    # Save updated cache — rebuilt from the index so stale entries are dropped
+    cache._data = {}
     for rel_path, file_entry in indexer._index.items():
         cache.set(rel_path, {
             "mtime": file_entry.mtime,

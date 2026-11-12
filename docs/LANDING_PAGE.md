@@ -365,6 +365,7 @@ claude mcp add codetree -- uvx --from mcp-server-codetree codetree --root .
 - **FastMCP** for the MCP protocol — stdio transport, zero network config.
 - **Plugin architecture** — each language is a self-contained class implementing 5 core methods. Adding a language is copying a template.
 - **Smart caching** — `.codetree/index.json` with mtime-based invalidation. Unchanged files skip parsing entirely.
+- **Respects `.gitignore`** — files are discovered via `git ls-files`, so ignored build output and nested git worktrees (e.g. `.claude/worktrees/`) are never indexed.
 - **Lazy call graph** — only built when tools like `find_dead_code` or `get_blast_radius` are first called. Stored in memory, O(1) lookup.
 - **PageRank** — standard algorithm (25 iterations, damping 0.85) for ranking symbol importance by reference count.
 - **Clone detection** — AST normalization (identifiers → `_ID_`, strings → `_STR_`, numbers → `_NUM_`) + SHA-256 hashing. Catches exact copies and renamed-variable copies.

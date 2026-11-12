@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from .languages.base import LanguagePlugin
@@ -43,6 +45,12 @@ class Indexer:
         self._call_graph: dict[str, set[str]] = {}
         self._reverse_graph: dict[str, set[str]] = {}
         self._call_graph_built: bool = False
+        # Rel paths in discovery order; _rebuild_definitions() orders _index by
+        # it so results do not depend on which files came from the cache.
+        self._discovery_order: list[str] = []
+        # Rel paths that build() discovered but skipped because the caller's
+        # cache already had them at the same mtime — to be injected from cache.
+        self.cached_candidates: list[str] = []
 
     @property
     def files(self) -> list[Path]:
@@ -64,6 +72,84 @@ class Indexer:
                 return True
         return False
 
+    def _git_ls_files(self, *args: str) -> list[Path] | None:
+        """Run `git ls-files -z <args>` in root. None if git cannot be used."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.root), "ls-files", "-z", *args],
+                capture_output=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        # Split raw bytes and fsdecode so non-UTF-8 file names round-trip.
+        return [self.root / os.fsdecode(raw) for raw in result.stdout.split(b"\0") if raw]
+
+    def _git_files(self) -> tuple[list[Path], list[Path]] | None:
+        """(tracked, untracked-but-not-ignored) files via git. None if git cannot be used.
+
+        Git does not descend into nested repositories, so worktrees and
+        submodules living under the root are excluded even when not ignored.
+        """
+        tracked = self._git_ls_files("--cached")
+        if tracked is None:
+            return None
+        untracked = self._git_ls_files("--others", "--exclude-standard")
+        if untracked is None:
+            return None
+        if not tracked and not untracked:
+            # Not inside a work tree in a useful way (e.g. root itself is ignored).
+            return None
+        return tracked, untracked
+
+    def _walk_files(self) -> list[Path]:
+        """List files by walking the tree, pruning before descending.
+
+        Prunes SKIP_DIRS and, like git, nested worktrees and submodules: a
+        directory whose `.git` is a file. Directories holding a full `.git`
+        repository are kept, so a root that groups several repos still works.
+        """
+        files = []
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in self.SKIP_DIRS
+                and not d.endswith(".egg-info")
+                and not os.path.isfile(os.path.join(dirpath, d, ".git"))
+            ]
+            files.extend(Path(dirpath) / name for name in filenames)
+        return files
+
+    def discover_files(self) -> list[Path]:
+        """Return supported source files under root, sorted and de-duplicated.
+
+        In a git work tree, every tracked file is a candidate (.gitignore
+        decides), while untracked files also skip SKIP_DIRS — a `.venv` or
+        `node_modules` nobody ignored. Outside git, the tree is walked,
+        skipping SKIP_DIRS and nested worktrees. `.codetree/` is never indexed.
+        """
+        git_files = self._git_files()
+        if git_files is not None:
+            tracked, untracked = git_files
+            candidates = [(path, False) for path in tracked]
+            candidates += [(path, True) for path in untracked]
+        else:
+            candidates = [(path, True) for path in self._walk_files()]
+        files = set()
+        for candidate, apply_skip_dirs in candidates:
+            if get_plugin(candidate) is None:
+                continue
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            rel = candidate.relative_to(self.root)
+            if rel.parts and rel.parts[0] == ".codetree":
+                continue
+            if apply_skip_dirs and self._should_skip(rel):
+                continue
+            files.add(candidate)  # a set: unmerged paths are listed once per stage
+        return sorted(files)
+
     def _rebuild_definitions(self) -> None:
         """Rebuild _definitions from current _index using qualified (file::name) keys.
 
@@ -75,6 +161,10 @@ class Indexer:
         Also rebuilds _name_to_qualified secondary index for O(1) callee lookup
         in _ensure_call_graph().
         """
+        if self._discovery_order:
+            ordered = {rel: self._index[rel] for rel in self._discovery_order if rel in self._index}
+            ordered.update(self._index)  # entries injected outside discovery keep their place at the end
+            self._index = ordered
         self._definitions = {}
         self._name_to_qualified = {}
         for rel_path, entry in self._index.items():
@@ -90,6 +180,36 @@ class Indexer:
                 if key not in self._name_to_qualified[bare]:
                     self._name_to_qualified[bare].append(key)
 
+    def index_file(self, path: Path, mtime: float | None = None) -> FileEntry | None:
+        """Parse one file into a FileEntry. None if unsupported or unreadable."""
+        plugin = get_plugin(path)
+        if plugin is None:
+            return None
+        try:
+            if mtime is None:
+                mtime = path.stat().st_mtime
+            source = path.read_bytes()
+        except OSError:
+            return None  # deleted or unreadable since discovery
+        try:
+            skeleton = plugin.extract_skeleton(source)
+            has_errors = plugin.check_syntax(source)
+        except Exception:
+            # ROBUST-01: Plugin crash (any exception) skips this file gracefully.
+            # File is still added to _index with empty skeleton and has_errors=True
+            # so tools that check entry.has_errors can warn the caller.
+            skeleton = []
+            has_errors = True
+        return FileEntry(
+            path=path,
+            source=source,
+            skeleton=skeleton,
+            mtime=mtime,
+            language=path.suffix.lstrip("."),
+            plugin=plugin,
+            has_errors=has_errors,
+        )
+
     def build(self, cached_mtimes: dict[str, float] | None = None):
         """Index all supported files under root, skipping non-project dirs.
 
@@ -97,39 +217,21 @@ class Indexer:
         the caller injects them via inject_cached().
         """
         cached_mtimes = cached_mtimes or {}
-        for candidate in self.root.rglob("*"):
-            if candidate.is_symlink():
-                continue
-            if not candidate.is_file():
-                continue
-            plugin = get_plugin(candidate)
-            if plugin is None:
-                continue
-            if self._should_skip(candidate.relative_to(self.root)):
-                continue
+        self.cached_candidates = []
+        files = self.discover_files()
+        self._discovery_order = [str(f.relative_to(self.root)) for f in files]
+        for candidate in files:
             rel = str(candidate.relative_to(self.root))
-            mtime = candidate.stat().st_mtime
-            if cached_mtimes.get(rel) == mtime:
-                continue
-            source = candidate.read_bytes()
             try:
-                skeleton = plugin.extract_skeleton(source)
-                has_errors = plugin.check_syntax(source)
-            except Exception:
-                # ROBUST-01: Plugin crash (any exception) skips this file gracefully.
-                # File is still added to _index with empty skeleton and has_errors=True
-                # so tools that check entry.has_errors can warn the caller.
-                skeleton = []
-                has_errors = True
-            self._index[rel] = FileEntry(
-                path=candidate,
-                source=source,
-                skeleton=skeleton,
-                mtime=mtime,
-                language=candidate.suffix.lstrip("."),
-                plugin=plugin,
-                has_errors=has_errors,
-            )
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                mtime = None
+            if mtime is not None and cached_mtimes.get(rel) == mtime:
+                self.cached_candidates.append(rel)
+            elif mtime is not None:
+                entry = self.index_file(candidate, mtime)
+                if entry is not None:
+                    self._index[rel] = entry
 
         # Build definition index from skeleton data (qualified keys, no duplicates, no ghosts)
         self._rebuild_definitions()

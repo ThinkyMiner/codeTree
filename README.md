@@ -238,6 +238,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 | **SCIP / LSIF indexers** | Slow builds, complex setup, huge indexes | ~1s startup, JSON cache, zero config |
 | **AST-only tools** | Raw trees are verbose and hard for agents | Pre-structured output designed for agents |
 
+## What Gets Indexed
+
+- **Git repositories:** every file `git ls-files` reports — tracked files plus
+  untracked files that `.gitignore` does not exclude. Tracked directories are
+  indexed even if named `build/`, `dist/` or `env/`; untracked `.venv/`,
+  `node_modules/`, `__pycache__/` and similar are skipped even when nobody
+  ignored them. Nested worktrees (e.g. `.claude/worktrees/`), nested
+  repositories and submodules are not indexed.
+- **Without git** (not a repository, `git` missing, or git refusing the
+  repository, e.g. `safe.directory`): the tree is walked, skipping `.venv`,
+  `node_modules`, `__pycache__`, `.git`, `dist`, `build`, … and nested worktrees.
+- `.codetree/` (codetree's own cache) is never indexed.
+
 ## Architecture
 
 ```

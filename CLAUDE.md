@@ -99,7 +99,7 @@ MCP tool call → server.py → indexer.py → FileEntry.plugin → tree-sitter 
 | File | Responsibility |
 |---|---|
 | `server.py` | FastMCP 3.1.0 server — defines the 23 tools, wires cache + indexer + graph at startup. Language-unaware. |
-| `indexer.py` | Discovers files, stores a `FileEntry` per file (with its plugin + `has_errors` flag), routes all queries through the stored plugin. Builds a definition index and lazy call graph for dead code, blast radius, and clone detection. Skips `.venv`, `node_modules`, `__pycache__`, `.git`, etc. |
+| `indexer.py` | Discovers files, stores a `FileEntry` per file (with its plugin + `has_errors` flag), routes all queries through the stored plugin. Builds a definition index and lazy call graph for dead code, blast radius, and clone detection. Discovers files with `git ls-files` (tracked files always; untracked non-ignored files minus `SKIP_DIRS`; nested worktrees/repos/submodules excluded), falling back to an `os.walk` that prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, etc.) and nested worktrees. |
 | `cache.py` | `.codetree/index.json` — stores pre-computed skeletons with mtime-based invalidation. Language-unaware. |
 | `registry.py` | Maps file extensions → plugin instances. The **only** place languages are registered. |
 
@@ -148,6 +148,7 @@ Each plugin implements:
 |---|---|
 | `test_server.py` | Original 4 MCP tools via FastMCP, output format, line accuracy, cross-language |
 | `test_indexer.py` | Build, skip-dirs, skeleton/symbol/refs/callgraph through indexer layer |
+| `test_file_discovery.py` | git-based discovery (.gitignore, nested worktrees/repos, submodules), walk fallback, stale cache entries |
 | `test_parse_cache.py` | Memoized query compilation and per-thread parse-tree cache |
 | `test_cache.py` | Cache load/save/invalidation |
 | `tests/languages/test_<lang>.py` | Per-language core tests |
@@ -213,7 +214,7 @@ The tree-sitter Python bindings have breaking changes from older docs:
 - Plugin classes: `{Lang}Plugin` (e.g., `PythonPlugin`, `GoPlugin`)
 - Module-level parser/language globals: `_PARSER`, `_LANGUAGE`
 - Skeleton results are deduplicated by `(name, line)` and sorted by line number
-- Indexer `SKIP_DIRS` includes `.venv`, `node_modules`, `__pycache__`, `.git` — without this, crawling `.venv` causes Claude Code timeout
+- File discovery: in a git work tree, tracked files (`git ls-files --cached`) are always indexed — `.gitignore` decides, so a tracked `build/` or `env/` is indexed — while untracked non-ignored files (`--others --exclude-standard`) also skip `SKIP_DIRS`, so an un-ignored `.venv`/`node_modules` is never crawled. Nested worktrees such as `.claude/worktrees/`, nested repos and submodules never leak in, and `.codetree/` is always excluded. Outside git (no repo, git missing or refusing the repo, root ignored), the walk prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, …) and directories whose `.git` is a file (worktrees, submodules) — without this, crawling `.venv` causes Claude Code timeout. Only discovered files are re-injected from the cache.
 - FastMCP tool access in tests: `mcp.local_provider._components[f"tool:{name}@"].fn`
 - **Doc sync rule**: When tools are added, removed, or changed, update all 5 doc files: `README.md`, `TOOLS_GUIDE.md`, `LANDING_PAGE.md`, `CLAUDE.md`, `AGENTS.md`
 
