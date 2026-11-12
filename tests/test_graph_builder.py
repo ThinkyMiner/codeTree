@@ -290,3 +290,28 @@ class TestTypeAwareResolution:
         if "main.py::process" in all_callers:
             assert "other.py::process" not in all_callers
         store.close()
+
+
+def test_build_uses_batched_store_access(tmp_path, monkeypatch):
+    """Row-by-row store calls stall a background build behind busy tool threads."""
+    (tmp_path / "calc.py").write_text(
+        "class Calc:\n    def add(self, a, b):\n        return helper(a) + b\n\n"
+        "def helper(x):\n    return x\n"
+    )
+    (tmp_path / "test_calc.py").write_text("from calc import helper\n\ndef test_helper():\n    helper(1)\n")
+
+    def row_by_row(*args, **kwargs):
+        raise AssertionError("per-row store access during build")
+
+    for method in ("upsert_symbol", "upsert_edge", "upsert_file", "symbols_by_name", "get_file"):
+        monkeypatch.setattr(GraphStore, method, row_by_row)
+
+    store = GraphStore(str(tmp_path))
+    store.open()
+    try:
+        stats = GraphBuilder(str(tmp_path), store).build()
+        assert stats["files_indexed"] == 2
+        assert {e.type for e in store.edges_from("calc.py::Calc")} == {"CONTAINS"}
+        assert [e.target_qn for e in store.edges_from("test_calc.py::test_helper", "TESTS")] == ["calc.py::helper"]
+    finally:
+        store.close()

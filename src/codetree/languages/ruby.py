@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_ruby as tsruby
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsruby.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -18,7 +18,7 @@ class RubyPlugin(LanguagePlugin):
         results = []
 
         # Classes
-        q = Query(_LANGUAGE, "(program (class name: (constant) @name) @def)")
+        q = _query(_LANGUAGE, "(program (class name: (constant) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "class",
@@ -29,7 +29,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Modules (treated as class for skeleton purposes)
-        q = Query(_LANGUAGE, "(program (module name: (constant) @name) @def)")
+        q = _query(_LANGUAGE, "(program (module name: (constant) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "class",
@@ -40,7 +40,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Instance methods inside classes (with params)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class
                 name: (constant) @class_name
                 (body_statement
@@ -58,7 +58,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Instance methods inside classes (no params)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class
                 name: (constant) @class_name
                 (body_statement
@@ -78,7 +78,7 @@ class RubyPlugin(LanguagePlugin):
                 })
 
         # Singleton methods in classes (def self.foo) — with params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class
                 name: (constant) @class_name
                 (body_statement
@@ -96,7 +96,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Singleton methods in classes — no params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class
                 name: (constant) @class_name
                 (body_statement
@@ -115,7 +115,7 @@ class RubyPlugin(LanguagePlugin):
                 })
 
         # Singleton methods in modules — with params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (module
                 name: (constant) @class_name
                 (body_statement
@@ -133,7 +133,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Singleton methods in modules — no params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (module
                 name: (constant) @class_name
                 (body_statement
@@ -152,7 +152,7 @@ class RubyPlugin(LanguagePlugin):
                 })
 
         # Instance methods in modules — with params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (module
                 name: (constant) @class_name
                 (body_statement
@@ -170,7 +170,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Instance methods in modules — no params
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (module
                 name: (constant) @class_name
                 (body_statement
@@ -189,7 +189,7 @@ class RubyPlugin(LanguagePlugin):
                 })
 
         # Top-level functions (method at program level) — with params
-        q = Query(_LANGUAGE, "(program (method name: (identifier) @name parameters: (method_parameters) @params) @def)")
+        q = _query(_LANGUAGE, "(program (method name: (identifier) @name parameters: (method_parameters) @params) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "function",
@@ -200,7 +200,7 @@ class RubyPlugin(LanguagePlugin):
             })
 
         # Top-level functions — no params
-        q = Query(_LANGUAGE, "(program (method name: (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(program (method name: (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             method_node = m["def"]
             if not any(child.type == "method_parameters" for child in method_node.children):
@@ -241,7 +241,7 @@ class RubyPlugin(LanguagePlugin):
             "(class name: (constant) @name) @def",
             "(module name: (constant) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
@@ -251,7 +251,7 @@ class RubyPlugin(LanguagePlugin):
             "(method name: (identifier) @name) @def",
             "(singleton_method name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
@@ -265,7 +265,7 @@ class RubyPlugin(LanguagePlugin):
             "(method name: (identifier) @name) @def",
             "(singleton_method name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -274,7 +274,7 @@ class RubyPlugin(LanguagePlugin):
         if fn_node is None:
             return []
 
-        q = Query(_LANGUAGE, "(call method: (identifier) @called)")
+        q = _query(_LANGUAGE, "(call method: (identifier) @called)")
         calls = set()
         for _, m in _matches(q, fn_node):
             calls.add(m["called"].text.decode("utf-8", errors="replace"))
@@ -285,7 +285,7 @@ class RubyPlugin(LanguagePlugin):
         usages = []
         seen = set()
         for node_type in ("identifier", "constant"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -298,7 +298,7 @@ class RubyPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(program (call method: (identifier) @method arguments: (argument_list (string) @path)) @imp)")
+        q = _query(_LANGUAGE, "(program (call method: (identifier) @method arguments: (argument_list (string) @path)) @imp)")
         for _, m in _matches(q, tree.root_node):
             method = m["method"].text.decode("utf-8", errors="replace")
             if method in ("require", "require_relative"):
@@ -328,7 +328,7 @@ class RubyPlugin(LanguagePlugin):
             "(method name: (identifier) @name) @def",
             "(singleton_method name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -419,7 +419,7 @@ class RubyPlugin(LanguagePlugin):
             "(method name: (identifier) @name) @def",
             "(singleton_method name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break

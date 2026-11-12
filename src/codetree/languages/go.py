@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_go as tsgo
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsgo.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -18,7 +18,7 @@ class GoPlugin(LanguagePlugin):
         results = []
 
         # Structs (Go's equivalent of classes)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (source_file
                 (type_declaration
                     (type_spec name: (type_identifier) @name
@@ -34,7 +34,7 @@ class GoPlugin(LanguagePlugin):
             })
 
         # Interfaces
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (source_file
                 (type_declaration
                     (type_spec name: (type_identifier) @name
@@ -50,7 +50,7 @@ class GoPlugin(LanguagePlugin):
             })
 
         # Methods (receiver functions)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (method_declaration
                 receiver: (parameter_list
                     (parameter_declaration
@@ -69,7 +69,7 @@ class GoPlugin(LanguagePlugin):
             })
 
         # Top-level functions
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (source_file
                 (function_declaration
                     name: (identifier) @name
@@ -100,7 +100,7 @@ class GoPlugin(LanguagePlugin):
         tree = _parse(source)
 
         # Functions
-        q = Query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -110,7 +110,7 @@ class GoPlugin(LanguagePlugin):
                 )
 
         # Methods (receiver functions)
-        q = Query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
+        q = _query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -120,7 +120,7 @@ class GoPlugin(LanguagePlugin):
                 )
 
         # Struct/interface types
-        q = Query(_LANGUAGE, "(type_declaration (type_spec name: (type_identifier) @name)) @def")
+        q = _query(_LANGUAGE, "(type_declaration (type_spec name: (type_identifier) @name)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -134,21 +134,21 @@ class GoPlugin(LanguagePlugin):
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         # Also search method declarations
         if fn_node is None:
-            q = Query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
+            q = _query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
         if fn_node is None:
             return []
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (call_expression function: [
                 (identifier) @called
                 (selector_expression field: (field_identifier) @called)
@@ -164,7 +164,7 @@ class GoPlugin(LanguagePlugin):
         usages = []
         seen = set()
         for node_type in ("identifier", "type_identifier", "field_identifier"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -177,7 +177,7 @@ class GoPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(source_file (import_declaration) @imp)")
+        q = _query(_LANGUAGE, "(source_file (import_declaration) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -190,13 +190,13 @@ class GoPlugin(LanguagePlugin):
     def compute_complexity(self, source: bytes, fn_name: str) -> dict | None:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         if fn_node is None:
-            q = Query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
+            q = _query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
@@ -230,12 +230,12 @@ class GoPlugin(LanguagePlugin):
 
         # Find function node (top-level function or method)
         fn_node = None
-        for _, m in _matches(Query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def"), tree.root_node):
+        for _, m in _matches(_query(_LANGUAGE, "(function_declaration name: (identifier) @name) @def"), tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         if fn_node is None:
-            for _, m in _matches(Query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def"), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, "(method_declaration name: (field_identifier) @name) @def"), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break

@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_c as tsc
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsc.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -24,7 +24,7 @@ class CPlugin(LanguagePlugin):
         results = []
 
         # Named structs with body (struct Foo { ... })
-        q = Query(_LANGUAGE, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
+        q = _query(_LANGUAGE, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "struct",
@@ -35,7 +35,7 @@ class CPlugin(LanguagePlugin):
             })
 
         # Typedef structs: typedef struct { ... } Name;
-        q = Query(_LANGUAGE, "(type_definition declarator: (type_identifier) @name) @def")
+        q = _query(_LANGUAGE, "(type_definition declarator: (type_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "struct",
@@ -46,7 +46,7 @@ class CPlugin(LanguagePlugin):
             })
 
         # Functions
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (translation_unit
                 (function_definition
                     declarator: (function_declarator
@@ -87,21 +87,21 @@ class CPlugin(LanguagePlugin):
         tree = _parse(source)
 
         # Functions
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
                 return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Structs
-        q = Query(_LANGUAGE, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
+        q = _query(_LANGUAGE, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
                 return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Typedef structs
-        q = Query(_LANGUAGE, "(type_definition declarator: (type_identifier) @name) @def")
+        q = _query(_LANGUAGE, "(type_definition declarator: (type_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -112,14 +112,14 @@ class CPlugin(LanguagePlugin):
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         if fn_node is None:
             return []
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (call_expression function: [
                 (identifier) @called
                 (field_expression field: (field_identifier) @called)
@@ -135,7 +135,7 @@ class CPlugin(LanguagePlugin):
         usages = []
         seen = set()
         for node_type in ("identifier", "type_identifier", "field_identifier"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -148,7 +148,7 @@ class CPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(translation_unit (preproc_include) @imp)")
+        q = _query(_LANGUAGE, "(translation_unit (preproc_include) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -166,7 +166,7 @@ class CPlugin(LanguagePlugin):
 
         # Find function node
         fn_node = None
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -266,7 +266,7 @@ class CPlugin(LanguagePlugin):
     def compute_complexity(self, source: bytes, fn_name: str) -> dict | None:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: (identifier) @name)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]

@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
-from .base import LanguagePlugin, _matches, _clean_doc
+from .base import LanguagePlugin, _matches, _clean_doc, _query, CachedParser
 
 _LANGUAGE = Language(tspython.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -30,7 +30,7 @@ class PythonPlugin(LanguagePlugin):
             "(module (class_definition name: (identifier) @name) @def)",
             "(module (decorated_definition (class_definition name: (identifier) @name)) @def)",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 results.append({
                     "type": "class",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -55,7 +55,7 @@ class PythonPlugin(LanguagePlugin):
                             name: (identifier) @method_name
                             parameters: (parameters) @params))))""",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 results.append({
                     "type": "method",
                     "name": m["method_name"].text.decode("utf-8", errors="replace"),
@@ -74,7 +74,7 @@ class PythonPlugin(LanguagePlugin):
                     name: (identifier) @name
                     parameters: (parameters) @params)) @def)""",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 results.append({
                     "type": "function",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -92,7 +92,7 @@ class PythonPlugin(LanguagePlugin):
             '(class_definition name: (identifier) @name body: (block (expression_statement (string) @doc)))',
             '(function_definition name: (identifier) @name body: (block (expression_statement (string) @doc)))',
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 name = m["name"].text.decode("utf-8", errors="replace")
                 line = m["name"].start_point[0] + 1
                 doc_text = m["doc"].text.decode("utf-8", errors="replace")
@@ -122,7 +122,7 @@ class PythonPlugin(LanguagePlugin):
         tree = _parse(source)
         for node_type in ("function_definition", "class_definition"):
             # Decorated definition first — return full decorated_definition (includes decorator)
-            q = Query(_LANGUAGE, f"(decorated_definition ({node_type} name: (identifier) @name)) @def")
+            q = _query(_LANGUAGE, f"(decorated_definition ({node_type} name: (identifier) @name)) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
@@ -131,7 +131,7 @@ class PythonPlugin(LanguagePlugin):
                         node.start_point[0] + 1,
                     )
             # Plain definition (not decorated)
-            q = Query(_LANGUAGE, f"({node_type} name: (identifier) @name) @def")
+            q = _query(_LANGUAGE, f"({node_type} name: (identifier) @name) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
@@ -149,7 +149,7 @@ class PythonPlugin(LanguagePlugin):
             "(function_definition name: (identifier) @name) @def",
             "(decorated_definition (function_definition name: (identifier) @name)) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -157,7 +157,7 @@ class PythonPlugin(LanguagePlugin):
                 break
         if fn_node is None:
             return []
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (call function: [
                 (identifier) @called
                 (attribute attribute: (identifier) @called)
@@ -170,7 +170,7 @@ class PythonPlugin(LanguagePlugin):
 
     def extract_symbol_usages(self, source: bytes, name: str) -> list[dict]:
         tree = _parse(source)
-        q = Query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
+        q = _query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
         usages = []
         for _, m in _matches(q, tree.root_node):
             node = m["name"]
@@ -185,7 +185,7 @@ class PythonPlugin(LanguagePlugin):
             "(module (import_from_statement) @imp)",
             "(module (future_import_statement) @imp)",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 node = m["imp"]
                 results.append({
                     "line": node.start_point[0] + 1,
@@ -201,7 +201,7 @@ class PythonPlugin(LanguagePlugin):
             "(function_definition name: (identifier) @name) @def",
             "(decorated_definition (function_definition name: (identifier) @name)) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -241,7 +241,7 @@ class PythonPlugin(LanguagePlugin):
             "(decorated_definition definition: (function_definition name: (identifier) @name) @def)",
             "(function_definition name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break

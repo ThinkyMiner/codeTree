@@ -1,12 +1,12 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_typescript as tsts
 from .javascript import JavaScriptPlugin, _arrow_params
-from .base import _matches, _fill_docs_from_siblings
+from .base import _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _TS_LANGUAGE = Language(tsts.language_typescript())
-_TS_PARSER = Parser(_TS_LANGUAGE)
+_TS_PARSER = CachedParser(Parser(_TS_LANGUAGE))
 _TSX_LANGUAGE = Language(tsts.language_tsx())
-_TSX_PARSER = Parser(_TSX_LANGUAGE)
+_TSX_PARSER = CachedParser(Parser(_TSX_LANGUAGE))
 
 
 class TypeScriptPlugin(JavaScriptPlugin):
@@ -32,7 +32,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(program (class_declaration name: (type_identifier) @name) @def)",
             "(program (export_statement (class_declaration name: (type_identifier) @name) @def))",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "class",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -46,7 +46,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(program (abstract_class_declaration name: (type_identifier) @name) @def)",
             "(program (export_statement (abstract_class_declaration name: (type_identifier) @name) @def))",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "class",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -70,7 +70,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
                         name: (property_identifier) @method_name
                         parameters: (formal_parameters) @params)))""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "method",
                     "name": m["method_name"].text.decode("utf-8", errors="replace"),
@@ -80,7 +80,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
                 })
 
         # Abstract method signatures (no body, e.g. abstract doWork(): void;)
-        q = Query(lang, """
+        q = _query(lang, """
             (abstract_class_declaration
                 name: (type_identifier) @class_name
                 body: (class_body
@@ -98,7 +98,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             })
 
         # Top-level function declarations (same as JS — uses identifier)
-        q = Query(lang, """
+        q = _query(lang, """
             (program (function_declaration
                 name: (identifier) @name
                 parameters: (formal_parameters) @params))
@@ -117,7 +117,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(program (interface_declaration name: (type_identifier) @name) @def)",
             "(program (export_statement (interface_declaration name: (type_identifier) @name) @def))",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "interface",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -131,7 +131,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(program (type_alias_declaration name: (type_identifier) @name) @def)",
             "(program (export_statement (type_alias_declaration name: (type_identifier) @name) @def))",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "type",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -141,7 +141,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
                 })
 
         # export default function foo() {}
-        q = Query(lang, """
+        q = _query(lang, """
             (program (export_statement
                 (function_declaration
                     name: (identifier) @name
@@ -168,7 +168,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
                     name: (identifier) @name
                     value: [(arrow_function) @fn (function_expression) @fn]))))""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 fn_node = m.get("fn")
                 results.append({
                     "type": "function",
@@ -220,7 +220,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(export_statement (abstract_class_declaration name: (type_identifier) @name) @def)",
             "(export_statement (interface_declaration name: (type_identifier) @name) @def)",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -239,7 +239,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
                     name: (identifier) @name
                     value: [(arrow_function) (function_expression)])) @def)""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -252,7 +252,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(type_alias_declaration name: (type_identifier) @name) @def",
             "(export_statement (type_alias_declaration name: (type_identifier) @name) @def)",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -265,7 +265,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(method_definition name: (property_identifier) @name) @def",
             "(abstract_method_signature name: (property_identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -286,7 +286,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
             "(function_declaration name: (identifier) @name) @def",
             "(method_definition name: (property_identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -296,7 +296,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
         # Arrow/function expressions
         if fn_node is None:
             q_str = "(variable_declarator name: (identifier) @name value: [(arrow_function) @def (function_expression) @def])"
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -391,7 +391,7 @@ class TypeScriptPlugin(JavaScriptPlugin):
 
         # Match both plain identifiers and type identifiers (class names appear as both)
         for node_kind in ("identifier", "type_identifier"):
-            q = Query(lang, f'(({node_kind}) @name (#eq? @name "{name}"))')
+            q = _query(lang, f'(({node_kind}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])

@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_rust as tsrust
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsrust.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -18,7 +18,7 @@ class RustPlugin(LanguagePlugin):
         results = []
 
         # Structs
-        q = Query(_LANGUAGE, "(source_file (struct_item name: (type_identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(source_file (struct_item name: (type_identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "struct",
@@ -29,7 +29,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Enums
-        q = Query(_LANGUAGE, "(source_file (enum_item name: (type_identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(source_file (enum_item name: (type_identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "enum",
@@ -40,7 +40,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Traits
-        q = Query(_LANGUAGE, "(source_file (trait_item name: (type_identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(source_file (trait_item name: (type_identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "trait",
@@ -51,7 +51,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Methods inside impl blocks (both direct impl and trait impl)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (impl_item
                 type: (type_identifier) @class_name
                 body: (declaration_list
@@ -69,7 +69,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Method signatures inside traits (fn without body)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (trait_item
                 name: (type_identifier) @trait_name
                 body: (declaration_list
@@ -87,7 +87,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Default method implementations inside traits (fn with body)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (trait_item
                 name: (type_identifier) @trait_name
                 body: (declaration_list
@@ -105,7 +105,7 @@ class RustPlugin(LanguagePlugin):
             })
 
         # Top-level functions (direct children of source_file)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (source_file
                 (function_item
                     name: (identifier) @name
@@ -145,7 +145,7 @@ class RustPlugin(LanguagePlugin):
         tree = _parse(source)
 
         # Functions (top-level and inside impl blocks)
-        q = Query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -157,7 +157,7 @@ class RustPlugin(LanguagePlugin):
             "(enum_item name: (type_identifier) @name) @def",
             "(trait_item name: (type_identifier) @name) @def",
         ]:
-            q = Query(_LANGUAGE, q_str)
+            q = _query(_LANGUAGE, q_str)
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
@@ -168,14 +168,14 @@ class RustPlugin(LanguagePlugin):
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         if fn_node is None:
             return []
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (call_expression function: [
                 (identifier) @called
                 (field_expression field: (field_identifier) @called)
@@ -195,7 +195,7 @@ class RustPlugin(LanguagePlugin):
         # type positions (e.g. `let calc = Calculator;` uses identifier,
         # while `impl Calculator` uses type_identifier).
         for node_type in ("identifier", "type_identifier"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -208,7 +208,7 @@ class RustPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(source_file (use_declaration) @imp)")
+        q = _query(_LANGUAGE, "(source_file (use_declaration) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -221,7 +221,7 @@ class RustPlugin(LanguagePlugin):
     def compute_complexity(self, source: bytes, fn_name: str) -> dict | None:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_item name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -254,7 +254,7 @@ class RustPlugin(LanguagePlugin):
 
         # Find function node
         fn_node = None
-        for _, m in _matches(Query(_LANGUAGE, "(function_item name: (identifier) @name) @def"), tree.root_node):
+        for _, m in _matches(_query(_LANGUAGE, "(function_item name: (identifier) @name) @def"), tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break

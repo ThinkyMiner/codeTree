@@ -1,6 +1,65 @@
+import threading
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 
 from tree_sitter import Query, QueryCursor
+
+
+# Compiling a tree-sitter Query costs several milliseconds (more than parsing a
+# whole file), so compiled queries are memoized per (language, pattern).
+# Bounded because some patterns interpolate a symbol name.
+_QUERY_CACHE_MAX = 2048
+_QUERY_CACHE: "OrderedDict[tuple[int, str], tuple[object, Query]]" = OrderedDict()
+_QUERY_CACHE_LOCK = threading.Lock()
+
+
+def _query(lang, pattern: str) -> Query:
+    """Return a compiled Query for (lang, pattern), compiling it at most once."""
+    key = (id(lang), pattern)
+    with _QUERY_CACHE_LOCK:
+        hit = _QUERY_CACHE.get(key)
+        if hit is not None:
+            _QUERY_CACHE.move_to_end(key)
+            return hit[1]
+    query = Query(lang, pattern)
+    with _QUERY_CACHE_LOCK:
+        # Keep a reference to lang so its id() cannot be reused while cached.
+        _QUERY_CACHE[key] = (lang, query)
+        if len(_QUERY_CACHE) > _QUERY_CACHE_MAX:
+            _QUERY_CACHE.popitem(last=False)
+    return query
+
+
+class CachedParser:
+    """Wrap a tree-sitter Parser and reuse trees for recently parsed sources.
+
+    Graph building and call-graph construction ask the same plugin about many
+    functions of one file in a row; without this every call re-parses the file.
+    The cache is per thread (trees are not shared across threads) and keyed by
+    the source bytes, so a changed file can never return a stale tree. It only
+    needs to cover consecutive calls on one file, so it stays tiny: every
+    FastMCP worker thread holds its own copy.
+    """
+
+    _MAX_TREES = 2
+
+    def __init__(self, parser):
+        self._parser = parser
+        self._local = threading.local()
+
+    def parse(self, source: bytes):
+        trees = getattr(self._local, "trees", None)
+        if trees is None:
+            trees = self._local.trees = OrderedDict()
+        tree = trees.get(source)
+        if tree is not None:
+            trees.move_to_end(source)
+            return tree
+        tree = self._parser.parse(source)
+        trees[source] = tree
+        if len(trees) > self._MAX_TREES:
+            trees.popitem(last=False)
+        return tree
 
 
 def _clean_doc(text: str) -> str:
@@ -22,7 +81,7 @@ def _fill_docs_from_siblings(results: list[dict], tree_root, lang, queries: list
     """
     comment_types = ("comment", "line_comment", "block_comment")
     for q_str in queries:
-        for _, m in _matches(Query(lang, q_str), tree_root):
+        for _, m in _matches(_query(lang, q_str), tree_root):
             node = m["def"]
             name = m["name"].text.decode("utf-8", errors="replace")
             line = m["name"].start_point[0] + 1

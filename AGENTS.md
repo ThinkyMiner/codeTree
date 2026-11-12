@@ -142,6 +142,7 @@ Each plugin implements:
 |---|---|
 | `test_server.py` | Original 4 MCP tools via FastMCP, output format, line accuracy, cross-language |
 | `test_indexer.py` | Build, skip-dirs, skeleton/symbol/refs/callgraph through indexer layer |
+| `test_parse_cache.py` | Memoized query compilation and per-thread parse-tree cache |
 | `test_cache.py` | Cache load/save/invalidation |
 | `tests/languages/test_<lang>.py` | Per-language core tests |
 | `tests/languages/test_<lang>_comprehensive.py` | Exhaustive code pattern coverage per language |
@@ -173,7 +174,8 @@ Fixtures in `conftest.py`: `sample_repo` (Python-only), `rich_py_repo` (decorato
 ## tree-sitter 0.25.x API
 
 The tree-sitter Python bindings have breaking changes from older docs:
-- Use `Query(LANGUAGE, "...")` not `LANGUAGE.query(...)`
+- Use `Query(LANGUAGE, "...")` not `LANGUAGE.query(...)` — in plugins, call the memoized `_query(LANGUAGE, "...")` from `languages/base.py` instead (compiling a Query costs more than parsing a file)
+- Wrap module parsers as `_PARSER = CachedParser(Parser(_LANGUAGE))` so repeated calls on the same source reuse the tree
 - Use `QueryCursor(query).matches(node)` not `query.matches(node)`
 - Match captures are `list[Node]` — unwrap with `nodes[0]` or use the shared `_matches()` helper from `languages/base.py`
 - All `.decode()` calls must use `errors="replace"`

@@ -142,6 +142,41 @@ class GraphStore:
             if not self._in_transaction:
                 self._conn.commit()
 
+    def upsert_files(self, rows: list[tuple[str, str, str, bool]]):
+        """Batch upsert_file: rows of (file_path, sha256, language, is_test)."""
+        now = time.time()
+        self._insert_many(
+            "INSERT OR REPLACE INTO files (file_path, sha256, language, is_test, indexed_at) VALUES ",
+            [(fp, sha, lang, int(is_test), now) for fp, sha, lang, is_test in rows],
+        )
+
+    # -- Batch writes --------------------------------------------------------
+
+    # Bound parameters per statement; 999 is the lowest SQLITE_MAX_VARIABLE_NUMBER.
+    _MAX_VARIABLES = 999
+
+    def _insert_many(self, sql_head: str, rows: list[tuple]):
+        """Insert rows with multi-row VALUES statements, preserving row order.
+
+        sqlite3 releases the GIL around every statement step — once per row even
+        with executemany. A background build then re-waits for the GIL behind any
+        CPU-bound tool call on every row; one statement per chunk avoids that.
+        """
+        if not rows:
+            return
+        width = len(rows[0])
+        per_statement = max(1, self._MAX_VARIABLES // width)
+        row_sql = "(" + ",".join("?" * width) + ")"
+        with self._lock:
+            for start in range(0, len(rows), per_statement):
+                chunk = rows[start:start + per_statement]
+                self._conn.execute(
+                    sql_head + ",".join([row_sql] * len(chunk)),
+                    [value for row in chunk for value in row],
+                )
+            if not self._in_transaction:
+                self._conn.commit()
+
     def get_file(self, file_path: str) -> dict | None:
         with self._lock:
             cur = self._conn.execute(
@@ -192,6 +227,39 @@ class GraphStore:
             )
             if not self._in_transaction:
                 self._conn.commit()
+
+    def upsert_symbols(self, syms: list[SymbolNode]):
+        """Batch upsert_symbol; later duplicates replace earlier ones, as one by one."""
+        self._insert_many(
+            "INSERT OR REPLACE INTO symbols "
+            "(qualified_name, name, kind, parent_qn, file_path, start_line, end_line, "
+            "doc, params, is_test, is_entry_point) VALUES ",
+            [
+                (
+                    sym.qualified_name, sym.name, sym.kind, sym.parent_qn,
+                    sym.file_path, sym.start_line, sym.end_line,
+                    sym.doc, sym.params, int(sym.is_test), int(sym.is_entry_point),
+                )
+                for sym in syms
+            ],
+        )
+
+    def symbols_by_name_map(self) -> dict[str, list[SymbolNode]]:
+        """All symbols grouped by name, each list in the order symbols_by_name() returns."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT qualified_name, name, kind, parent_qn, file_path, start_line, end_line, "
+                "doc, params, is_test, is_entry_point FROM symbols ORDER BY name, rowid"
+            )
+            by_name: dict[str, list[SymbolNode]] = {}
+            for r in cur.fetchall():
+                by_name.setdefault(r[1], []).append(SymbolNode(
+                    qualified_name=r[0], name=r[1], kind=r[2], parent_qn=r[3],
+                    file_path=r[4], start_line=r[5], end_line=r[6],
+                    doc=r[7] or "", params=r[8] or "",
+                    is_test=bool(r[9]), is_entry_point=bool(r[10]),
+                ))
+            return by_name
 
     def get_symbol(self, qualified_name: str) -> SymbolNode | None:
         with self._lock:
@@ -262,6 +330,13 @@ class GraphStore:
             if not self._in_transaction:
                 self._conn.commit()
 
+    def upsert_edges(self, edges: list[Edge]):
+        """Batch upsert_edge; later duplicates replace earlier ones, as one by one."""
+        self._insert_many(
+            "INSERT OR REPLACE INTO edges (source_qn, target_qn, type, weight) VALUES ",
+            [(e.source_qn, e.target_qn, e.type, e.weight) for e in edges],
+        )
+
     def edges_from(self, source_qn: str, edge_type: str | None = None) -> list[Edge]:
         with self._lock:
             if edge_type:
@@ -294,10 +369,15 @@ class GraphStore:
 
     def delete_edges_for_file(self, file_path: str):
         with self._lock:
-            prefix = file_path + "::"
+            # Range scans on the indexed columns: every qualified name starting
+            # with "file::" sorts in ["file::", "file:;"). Unlike LIKE, this uses
+            # idx_edges_source/target and is exact (no case folding, no '_' wildcard).
+            low, high = file_path + "::", file_path + ":;"
             self._conn.execute(
-                "DELETE FROM edges WHERE source_qn LIKE ? OR target_qn LIKE ?",
-                (prefix + "%", prefix + "%"),
+                "DELETE FROM edges WHERE source_qn >= ? AND source_qn < ?", (low, high)
+            )
+            self._conn.execute(
+                "DELETE FROM edges WHERE target_qn >= ? AND target_qn < ?", (low, high)
             )
             if not self._in_transaction:
                 self._conn.commit()

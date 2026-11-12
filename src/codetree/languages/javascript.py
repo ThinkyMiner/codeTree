@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_javascript as tsjs
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsjs.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -47,7 +47,7 @@ class JavaScriptPlugin(LanguagePlugin):
             "(program (class_declaration name: (identifier) @name) @def)",
             "(program (export_statement (class_declaration name: (identifier) @name) @def))",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "class",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -57,7 +57,7 @@ class JavaScriptPlugin(LanguagePlugin):
                 })
 
         # Methods inside classes
-        q = Query(lang, """
+        q = _query(lang, """
             (class_declaration
                 name: (identifier) @class_name
                 body: (class_body
@@ -75,7 +75,7 @@ class JavaScriptPlugin(LanguagePlugin):
             })
 
         # Top-level function declarations: function foo() {}
-        q = Query(lang, """
+        q = _query(lang, """
             (program (function_declaration
                 name: (identifier) @name
                 parameters: (formal_parameters) @params))
@@ -100,7 +100,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     name: (identifier) @name
                     parameters: (formal_parameters) @params) @def))""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 results.append({
                     "type": "function",
                     "name": m["name"].text.decode("utf-8", errors="replace"),
@@ -110,7 +110,7 @@ class JavaScriptPlugin(LanguagePlugin):
                 })
 
         # Generator functions: function* gen() {}
-        q = Query(lang, """
+        q = _query(lang, """
             (program (generator_function_declaration
                 name: (identifier) @name
                 parameters: (formal_parameters) @params))
@@ -136,7 +136,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     name: (identifier) @name
                     value: [(arrow_function) @fn (function_expression) @fn]))))""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 fn_node = m.get("fn")
                 results.append({
                     "type": "function",
@@ -181,7 +181,7 @@ class JavaScriptPlugin(LanguagePlugin):
             "(export_statement (class_declaration name: (identifier) @name) @def)",
             "(export_statement (generator_function_declaration name: (identifier) @name) @def)",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -200,7 +200,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     name: (identifier) @name
                     value: [(arrow_function) (function_expression)])) @def)""",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return (
@@ -209,7 +209,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     )
 
         # Methods inside classes (method_definition)
-        q = Query(lang, "(method_definition name: (property_identifier) @name) @def")
+        q = _query(lang, "(method_definition name: (property_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -232,7 +232,7 @@ class JavaScriptPlugin(LanguagePlugin):
             "(export_statement (function_declaration name: (identifier) @name) @def)",
             "(export_statement (generator_function_declaration name: (identifier) @name) @def)",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -246,7 +246,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     name: (identifier) @name
                     value: [(arrow_function) @def (function_expression) @def])""",
             ]:
-                for _, m in _matches(Query(lang, q_str), tree.root_node):
+                for _, m in _matches(_query(lang, q_str), tree.root_node):
                     if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                         fn_node = m["def"]
                         break
@@ -255,7 +255,7 @@ class JavaScriptPlugin(LanguagePlugin):
 
         # Methods inside classes
         if fn_node is None:
-            q = Query(lang, "(method_definition name: (property_identifier) @name) @def")
+            q = _query(lang, "(method_definition name: (property_identifier) @name) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
@@ -264,13 +264,13 @@ class JavaScriptPlugin(LanguagePlugin):
         if fn_node is None:
             return []
 
-        q_call = Query(lang, """
+        q_call = _query(lang, """
             (call_expression function: [
                 (identifier) @called
                 (member_expression property: (property_identifier) @called)
             ])
         """)
-        q_new = Query(lang, "(new_expression constructor: (identifier) @called)")
+        q_new = _query(lang, "(new_expression constructor: (identifier) @called)")
         calls = set()
         for _, m in _matches(q_call, fn_node):
             calls.add(m["called"].text.decode("utf-8", errors="replace"))
@@ -281,7 +281,7 @@ class JavaScriptPlugin(LanguagePlugin):
     def extract_symbol_usages(self, source: bytes, name: str) -> list[dict]:
         lang = self._get_language()
         tree = self._get_parser().parse(source)
-        q = Query(lang, f'((identifier) @name (#eq? @name "{name}"))')
+        q = _query(lang, f'((identifier) @name (#eq? @name "{name}"))')
         usages = []
         for _, m in _matches(q, tree.root_node):
             node = m["name"]
@@ -292,7 +292,7 @@ class JavaScriptPlugin(LanguagePlugin):
         lang = self._get_language()
         tree = self._get_parser().parse(source)
         results = []
-        q = Query(lang, "(program (import_statement) @imp)")
+        q = _query(lang, "(program (import_statement) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -313,7 +313,7 @@ class JavaScriptPlugin(LanguagePlugin):
             "(export_statement (function_declaration name: (identifier) @name) @def)",
             "(export_statement (generator_function_declaration name: (identifier) @name) @def)",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -326,7 +326,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     name: (identifier) @name
                     value: [(arrow_function) @def (function_expression) @def])""",
             ]:
-                for _, m in _matches(Query(lang, q_str), tree.root_node):
+                for _, m in _matches(_query(lang, q_str), tree.root_node):
                     if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                         fn_node = m["def"]
                         break
@@ -334,7 +334,7 @@ class JavaScriptPlugin(LanguagePlugin):
                     break
 
         if fn_node is None:
-            q = Query(lang, "(method_definition name: (property_identifier) @name) @def")
+            q = _query(lang, "(method_definition name: (property_identifier) @name) @def")
             for _, m in _matches(q, tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
@@ -383,7 +383,7 @@ class JavaScriptPlugin(LanguagePlugin):
             "(generator_function_declaration name: (identifier) @name) @def",
             "(method_definition name: (property_identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -393,7 +393,7 @@ class JavaScriptPlugin(LanguagePlugin):
         # Also look for arrow/function expression: const foo = () => {}
         if fn_node is None:
             q_str = "(variable_declarator name: (identifier) @name value: [(arrow_function) @def (function_expression) @def])"
-            for _, m in _matches(Query(lang, q_str), tree.root_node):
+            for _, m in _matches(_query(lang, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break

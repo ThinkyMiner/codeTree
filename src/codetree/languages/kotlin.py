@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_kotlin as tskotlin
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tskotlin.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -18,7 +18,7 @@ class KotlinPlugin(LanguagePlugin):
         results = []
 
         # Top-level classes / interfaces (both use class_declaration)
-        q = Query(_LANGUAGE, "(source_file (class_declaration (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(source_file (class_declaration (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             node_def = m["def"]
             # Check if it's an interface
@@ -37,7 +37,7 @@ class KotlinPlugin(LanguagePlugin):
             })
 
         # Top-level objects
-        q = Query(_LANGUAGE, "(source_file (object_declaration (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(source_file (object_declaration (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "class",
@@ -48,7 +48,7 @@ class KotlinPlugin(LanguagePlugin):
             })
 
         # Top-level functions
-        q = Query(_LANGUAGE, "(source_file (function_declaration (identifier) @name (function_value_parameters) @params) @def)")
+        q = _query(_LANGUAGE, "(source_file (function_declaration (identifier) @name (function_value_parameters) @params) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "function",
@@ -59,7 +59,7 @@ class KotlinPlugin(LanguagePlugin):
             })
 
         # Methods inside classes/interfaces
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class_declaration
                 (identifier) @class_name
                 (class_body
@@ -77,7 +77,7 @@ class KotlinPlugin(LanguagePlugin):
             })
 
         # Methods inside objects
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (object_declaration
                 (identifier) @class_name
                 (class_body
@@ -114,13 +114,13 @@ class KotlinPlugin(LanguagePlugin):
             "(class_declaration (identifier) @name) @def",
             "(object_declaration (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Functions/Methods
-        q = Query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -131,7 +131,7 @@ class KotlinPlugin(LanguagePlugin):
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -141,7 +141,7 @@ class KotlinPlugin(LanguagePlugin):
 
         calls = set()
         # Method calls: foo(), foo.bar()
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (call_expression
                 [
                     (identifier) @called
@@ -164,7 +164,7 @@ class KotlinPlugin(LanguagePlugin):
         usages = []
         seen = set()
         # Kotlin uses identifier for most things
-        q = Query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
+        q = _query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
         for _, m in _matches(q, tree.root_node):
             node = m["name"]
             key = (node.start_point[0], node.start_point[1])
@@ -178,7 +178,7 @@ class KotlinPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(import) @imp")
+        q = _query(_LANGUAGE, "(import) @imp")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -191,7 +191,7 @@ class KotlinPlugin(LanguagePlugin):
     def compute_complexity(self, source: bytes, fn_name: str) -> dict | None:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -226,7 +226,7 @@ class KotlinPlugin(LanguagePlugin):
     def extract_variables(self, source: bytes, fn_name: str) -> list[dict]:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(function_declaration (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -243,7 +243,7 @@ class KotlinPlugin(LanguagePlugin):
                 results.append({"name": name, "line": line, "type": var_type, "kind": kind})
 
         # Parameters
-        q_params = Query(_LANGUAGE, "(parameter (identifier) @name (user_type)? @type)")
+        q_params = _query(_LANGUAGE, "(parameter (identifier) @name (user_type)? @type)")
         for _, m in _matches(q_params, fn_node):
              type_text = m.get("type").text.decode("utf-8", errors="replace") if m.get("type") else ""
              _add(m["name"].text.decode("utf-8", errors="replace"),
@@ -252,7 +252,7 @@ class KotlinPlugin(LanguagePlugin):
                   kind="parameter")
 
         # Local variables (val/var)
-        q_vars = Query(_LANGUAGE, "(variable_declaration (identifier) @name (user_type)? @type)")
+        q_vars = _query(_LANGUAGE, "(variable_declaration (identifier) @name (user_type)? @type)")
         for _, m in _matches(q_vars, fn_node):
             type_text = m.get("type").text.decode("utf-8", errors="replace") if m.get("type") else ""
             _add(m["name"].text.decode("utf-8", errors="replace"),

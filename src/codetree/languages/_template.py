@@ -39,14 +39,14 @@
 # See docs/language-nodes.md for a cheatsheet of node types per language.
 # ============================================================
 
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 
 # TODO: replace with your grammar import
 # import tree_sitter_LANG as tslang
 # _LANGUAGE = Language(tslang.language())
-# _PARSER = Parser(_LANGUAGE)
+# _PARSER = CachedParser(Parser(_LANGUAGE))  # CachedParser from .base
 
-from .base import LanguagePlugin, _matches
+from .base import LanguagePlugin, _matches, _query  # _query: cached Query compile
 # Import this from base — do not copy
 
 
@@ -68,7 +68,7 @@ class TemplateLangPlugin(LanguagePlugin):
           3. Top-level functions
 
         Example (Python):
-            q = Query(_LANGUAGE, "(module (class_definition name: (identifier) @name) @def)")
+            q = _query(_LANGUAGE, "(module (class_definition name: (identifier) @name) @def)")
         """
         # tree = _PARSER.parse(source)
         results = []
@@ -98,7 +98,7 @@ class TemplateLangPlugin(LanguagePlugin):
           Step 3 — Capture called function names (usually (identifier) or method name)
 
         Example (JavaScript):
-            q = Query(_LANGUAGE, '''
+            q = _query(_LANGUAGE, '''
                 (call_expression function: [
                     (identifier) @called
                     (member_expression property: (property_identifier) @called)
@@ -116,7 +116,7 @@ class TemplateLangPlugin(LanguagePlugin):
         than Python-level filtering for large files).
 
         This query works for Python, JavaScript, Go, Rust, Java:
-            q = Query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'((identifier) @name (#eq? @name "{name}"))')
 
         Each result dict: {"line": int, "col": int}  (both 1-based and 0-based respectively)
         """
@@ -129,7 +129,7 @@ class TemplateLangPlugin(LanguagePlugin):
         Each result dict: {"line": int, "text": str}
 
         Example (Python):
-            q = Query(_LANGUAGE, "(module (import_statement) @imp)")
+            q = _query(_LANGUAGE, "(module (import_statement) @imp)")
         """
         # tree = _PARSER.parse(source)
         return []

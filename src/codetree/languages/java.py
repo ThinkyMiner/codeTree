@@ -1,9 +1,9 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_java as tsjava
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings
+from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tsjava.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -18,7 +18,7 @@ class JavaPlugin(LanguagePlugin):
         results = []
 
         # Top-level classes
-        q = Query(_LANGUAGE, "(program (class_declaration name: (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(program (class_declaration name: (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "class",
@@ -29,7 +29,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Methods inside classes
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class_declaration
                 name: (identifier) @class_name
                 body: (class_body
@@ -47,7 +47,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Constructors inside classes
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (class_declaration
                 name: (identifier) @class_name
                 body: (class_body
@@ -65,7 +65,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Interfaces (top-level)
-        q = Query(_LANGUAGE, "(program (interface_declaration name: (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(program (interface_declaration name: (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "interface",
@@ -76,7 +76,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Enums (top-level)
-        q = Query(_LANGUAGE, "(program (enum_declaration name: (identifier) @name) @def)")
+        q = _query(_LANGUAGE, "(program (enum_declaration name: (identifier) @name) @def)")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "enum",
@@ -87,7 +87,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Methods inside enums (live under enum_body > enum_body_declarations)
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (enum_declaration
                 name: (identifier) @class_name
                 body: (enum_body
@@ -106,7 +106,7 @@ class JavaPlugin(LanguagePlugin):
             })
 
         # Methods inside interfaces
-        q = Query(_LANGUAGE, """
+        q = _query(_LANGUAGE, """
             (interface_declaration
                 name: (identifier) @class_name
                 body: (interface_body
@@ -145,20 +145,20 @@ class JavaPlugin(LanguagePlugin):
             "(interface_declaration name: (identifier) @name) @def",
             "(enum_declaration name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == name:
                     node = m["def"]
                     return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Methods
-        q = Query(_LANGUAGE, "(method_declaration name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(method_declaration name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
                 return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Constructors
-        q = Query(_LANGUAGE, "(constructor_declaration name: (identifier) @name) @def")
+        q = _query(_LANGUAGE, "(constructor_declaration name: (identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -173,7 +173,7 @@ class JavaPlugin(LanguagePlugin):
             "(method_declaration name: (identifier) @name) @def",
             "(constructor_declaration name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -183,11 +183,11 @@ class JavaPlugin(LanguagePlugin):
             return []
         calls = set()
         # Method calls
-        q = Query(_LANGUAGE, "(method_invocation name: (identifier) @called)")
+        q = _query(_LANGUAGE, "(method_invocation name: (identifier) @called)")
         for _, m in _matches(q, fn_node):
             calls.add(m["called"].text.decode("utf-8", errors="replace"))
         # Object creation (new Calculator())
-        q = Query(_LANGUAGE, "(object_creation_expression type: (type_identifier) @called)")
+        q = _query(_LANGUAGE, "(object_creation_expression type: (type_identifier) @called)")
         for _, m in _matches(q, fn_node):
             calls.add(m["called"].text.decode("utf-8", errors="replace"))
         return sorted(calls)
@@ -200,7 +200,7 @@ class JavaPlugin(LanguagePlugin):
         # type positions (e.g. `Calculator calc = ...` uses type_identifier,
         # while method names use identifier).
         for node_type in ("identifier", "type_identifier"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -213,7 +213,7 @@ class JavaPlugin(LanguagePlugin):
     def extract_imports(self, source: bytes) -> list[dict]:
         tree = _parse(source)
         results = []
-        q = Query(_LANGUAGE, "(program (import_declaration) @imp)")
+        q = _query(_LANGUAGE, "(program (import_declaration) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -230,7 +230,7 @@ class JavaPlugin(LanguagePlugin):
             "(method_declaration name: (identifier) @name) @def",
             "(constructor_declaration name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break
@@ -275,7 +275,7 @@ class JavaPlugin(LanguagePlugin):
             "(method_declaration name: (identifier) @name) @def",
             "(constructor_declaration name: (identifier) @name) @def",
         ]:
-            for _, m in _matches(Query(_LANGUAGE, q_str), tree.root_node):
+            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
                 if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                     fn_node = m["def"]
                     break

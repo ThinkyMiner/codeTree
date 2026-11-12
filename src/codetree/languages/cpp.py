@@ -1,10 +1,10 @@
-from tree_sitter import Language, Parser, Query
+from tree_sitter import Language, Parser
 import tree_sitter_cpp as tscpp
 from .c import CPlugin
-from .base import _matches, _fill_docs_from_siblings
+from .base import _matches, _fill_docs_from_siblings, _query, CachedParser
 
 _LANGUAGE = Language(tscpp.language())
-_PARSER = Parser(_LANGUAGE)
+_PARSER = CachedParser(Parser(_LANGUAGE))
 
 
 def _parse(source: bytes):
@@ -28,7 +28,7 @@ class CppPlugin(CPlugin):
         results = []
 
         # Classes
-        q = Query(lang, "(class_specifier name: (type_identifier) @name) @def")
+        q = _query(lang, "(class_specifier name: (type_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "class",
@@ -39,7 +39,7 @@ class CppPlugin(CPlugin):
             })
 
         # Methods inside classes (function_definition in field_declaration_list)
-        q = Query(lang, """
+        q = _query(lang, """
             (class_specifier
                 name: (type_identifier) @class_name
                 body: (field_declaration_list
@@ -58,7 +58,7 @@ class CppPlugin(CPlugin):
             })
 
         # Structs (C++ uses same struct_specifier as C)
-        q = Query(lang, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
+        q = _query(lang, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
         for _, m in _matches(q, tree.root_node):
             results.append({
                 "type": "struct",
@@ -69,7 +69,7 @@ class CppPlugin(CPlugin):
             })
 
         # Top-level functions (translation_unit direct children)
-        q = Query(lang, """
+        q = _query(lang, """
             (translation_unit
                 (function_definition
                     declarator: (function_declarator
@@ -86,7 +86,7 @@ class CppPlugin(CPlugin):
             })
 
         # Functions inside namespaces
-        q = Query(lang, """
+        q = _query(lang, """
             (namespace_definition
                 body: (declaration_list
                     (function_definition
@@ -129,21 +129,21 @@ class CppPlugin(CPlugin):
         tree = _parse(source)
 
         # Functions — check both identifier (top-level) and field_identifier (class methods)
-        q = Query(lang, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
+        q = _query(lang, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
                 return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Classes
-        q = Query(lang, "(class_specifier name: (type_identifier) @name) @def")
+        q = _query(lang, "(class_specifier name: (type_identifier) @name) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
                 return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace"), node.start_point[0] + 1
 
         # Structs
-        q = Query(lang, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
+        q = _query(lang, "(struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == name:
                 node = m["def"]
@@ -155,14 +155,14 @@ class CppPlugin(CPlugin):
         lang = _LANGUAGE
         tree = _parse(source)
         fn_node = None
-        q = Query(lang, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
+        q = _query(lang, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
                 break
         if fn_node is None:
             return []
-        q = Query(lang, """
+        q = _query(lang, """
             (call_expression function: [
                 (identifier) @called
                 (field_expression field: (field_identifier) @called)
@@ -178,7 +178,7 @@ class CppPlugin(CPlugin):
         usages = []
         seen = set()
         for node_type in ("identifier", "type_identifier", "field_identifier", "namespace_identifier"):
-            q = Query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
+            q = _query(_LANGUAGE, f'(({node_type}) @name (#eq? @name "{name}"))')
             for _, m in _matches(q, tree.root_node):
                 node = m["name"]
                 key = (node.start_point[0], node.start_point[1])
@@ -192,7 +192,7 @@ class CppPlugin(CPlugin):
         tree = _parse(source)
         results = []
         # #include statements
-        q = Query(_LANGUAGE, "(translation_unit (preproc_include) @imp)")
+        q = _query(_LANGUAGE, "(translation_unit (preproc_include) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -200,7 +200,7 @@ class CppPlugin(CPlugin):
                 "text": node.text.decode("utf-8", errors="replace").strip(),
             })
         # using declarations
-        q = Query(_LANGUAGE, "(translation_unit (using_declaration) @imp)")
+        q = _query(_LANGUAGE, "(translation_unit (using_declaration) @imp)")
         for _, m in _matches(q, tree.root_node):
             node = m["imp"]
             results.append({
@@ -218,7 +218,7 @@ class CppPlugin(CPlugin):
 
         # Find function node — check both identifier (top-level) and field_identifier (class methods)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
@@ -337,7 +337,7 @@ class CppPlugin(CPlugin):
     def compute_complexity(self, source: bytes, fn_name: str) -> dict | None:
         tree = _parse(source)
         fn_node = None
-        q = Query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
+        q = _query(_LANGUAGE, "(function_definition declarator: (function_declarator declarator: [(identifier) @name (field_identifier) @name])) @def")
         for _, m in _matches(q, tree.root_node):
             if m["name"].text.decode("utf-8", errors="replace") == fn_name:
                 fn_node = m["def"]
