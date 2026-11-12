@@ -30,7 +30,7 @@ It exposes **23 tools** over MCP:
 
 | Tool | Purpose | Returns |
 |------|---------|---------|
-| `index_status()` | Graph index freshness and stats | `{graph_exists, files, symbols, edges, last_indexed_at}` |
+| `index_status()` | Indexing progress, graph freshness and stats (never blocks) | `{graph_exists, files, symbols, edges, last_indexed_at, status, files_discovered, files_indexed, index_ready, graph_ready, startup_seconds?, error?}` |
 | `get_repository_map(max_items?)` | Compact repo overview for agent onboarding | `{languages, entry_points, hotspots, start_here, test_roots, stats}` |
 | `resolve_symbol(query, kind?, path_hint?)` | Disambiguate short symbol names into qualified matches | `{matches: [{qualified_name, name, kind, file, line}]}` |
 | `search_graph(query?, kind?, file_pattern?, ...)` | Structured graph search with pagination and degree filtering | `{total, results: [{qualified_name, kind, in_degree, out_degree}]}` |
@@ -66,7 +66,7 @@ All `file_path` arguments are **relative to the repo root** (e.g., `"src/main.py
 # Activate venv (required before all commands)
 source .venv/bin/activate
 
-# Run all tests (~1058 tests, ~35s)
+# Run all tests (~1200 tests, ~20s)
 pytest
 
 # Run a single test file
@@ -98,7 +98,8 @@ MCP tool call → server.py → indexer.py → FileEntry.plugin → tree-sitter 
 
 | File | Responsibility |
 |---|---|
-| `server.py` | FastMCP 3.1.0 server — defines the 23 tools, wires cache + indexer + graph at startup. Language-unaware. |
+| `server.py` | FastMCP 3.1.0 server — defines the 23 tools; each tool asks `IndexState` for the data it needs (single-file → on-demand parse, repo-wide → full index, graph → SQLite graph). Language-unaware. |
+| `index_state.py` | `IndexState` — owns the index lifecycle: discovery → indexing (skeleton cache) → graph build, in a background thread when run as `codetree` (`create_server(root, background=True)`), synchronously by default (tests). Exposes `files_ready`/`index_ready`/`graph_ready` events, bounded waits (`WAIT_TIMEOUT`, env `CODETREE_WAIT_TIMEOUT`), progress and errors for `index_status`. Exposed to tests as `mcp._codetree_state`. |
 | `indexer.py` | Discovers files, stores a `FileEntry` per file (with its plugin + `has_errors` flag), routes all queries through the stored plugin. Builds a definition index and lazy call graph for dead code, blast radius, and clone detection. Discovers files with `git ls-files` (tracked files always; untracked non-ignored files minus `SKIP_DIRS`; nested worktrees/repos/submodules excluded), falling back to an `os.walk` that prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, etc.) and nested worktrees. |
 | `cache.py` | `.codetree/index.json` — stores pre-computed skeletons with mtime-based invalidation. Language-unaware. |
 | `registry.py` | Maps file extensions → plugin instances. The **only** place languages are registered. |
@@ -150,6 +151,7 @@ Each plugin implements:
 | `test_indexer.py` | Build, skip-dirs, skeleton/symbol/refs/callgraph through indexer layer |
 | `test_file_discovery.py` | git-based discovery (.gitignore, nested worktrees/repos, submodules), walk fallback, stale cache entries |
 | `test_parse_cache.py` | Memoized query compilation and per-thread parse-tree cache |
+| `test_async_startup.py` | Background indexing: non-blocking startup, on-demand single-file tools, "still building" messages, failure handling |
 | `test_cache.py` | Cache load/save/invalidation |
 | `tests/languages/test_<lang>.py` | Per-language core tests |
 | `tests/languages/test_<lang>_comprehensive.py` | Exhaustive code pattern coverage per language |
@@ -214,7 +216,7 @@ The tree-sitter Python bindings have breaking changes from older docs:
 - Plugin classes: `{Lang}Plugin` (e.g., `PythonPlugin`, `GoPlugin`)
 - Module-level parser/language globals: `_PARSER`, `_LANGUAGE`
 - Skeleton results are deduplicated by `(name, line)` and sorted by line number
-- File discovery: in a git work tree, tracked files (`git ls-files --cached`) are always indexed — `.gitignore` decides, so a tracked `build/` or `env/` is indexed — while untracked non-ignored files (`--others --exclude-standard`) also skip `SKIP_DIRS`, so an un-ignored `.venv`/`node_modules` is never crawled. Nested worktrees such as `.claude/worktrees/`, nested repos and submodules never leak in, and `.codetree/` is always excluded. Outside git (no repo, git missing or refusing the repo, root ignored), the walk prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, …) and directories whose `.git` is a file (worktrees, submodules) — without this, crawling `.venv` causes Claude Code timeout. Only discovered files are re-injected from the cache.
+- File discovery: in a git work tree, tracked files (`git ls-files --cached`) are always indexed — `.gitignore` decides, so a tracked `build/` or `env/` is indexed — while untracked non-ignored files (`--others --exclude-standard`) also skip `SKIP_DIRS`, so an un-ignored `.venv`/`node_modules` is never crawled. Nested worktrees such as `.claude/worktrees/`, nested repos and submodules never leak in, and `.codetree/` is always excluded. Outside git (no repo, git missing or refusing the repo, root ignored), the walk prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, …) and directories whose `.git` is a file (worktrees, submodules) — without this, crawling `.venv` causes Claude Code timeout. Only discovered files are re-injected from the cache, which also stores each file's `has_errors` flag.
 - FastMCP tool access in tests: `mcp.local_provider._components[f"tool:{name}@"].fn`
 - **Doc sync rule**: When tools are added, removed, or changed, update all 5 doc files: `README.md`, `TOOLS_GUIDE.md`, `LANDING_PAGE.md`, `CLAUDE.md`, `AGENTS.md`
 
@@ -256,13 +258,13 @@ codetree is a Python MCP server that gives coding agents structured code underst
 - Optional: `uv` for faster installation (recommended in README for Quick Start)
 - Lockfile: `.venv/` contains installed packages; no `requirements.txt` or `pyproject.lock` committed
 ## Frameworks
-- FastMCP 3.1.0 (or later `>=2.0.0`) - MCP (Model Context Protocol) server framework
+- FastMCP 3.x (`>=3.0.0`, which runs sync tools in a thread pool — required for background indexing) - MCP (Model Context Protocol) server framework
 - tree-sitter 0.23.0+ - AST parsing library (language-agnostic)
 - pytest (via GitHub Actions workflow, not explicitly in pyproject.toml dependencies but installed in CI)
 - hatchling (build backend)
 ## Key Dependencies
 - tree-sitter (0.23.0+) - Core AST parsing; blocks everything else
-- fastmcp (2.0.0+) - MCP server registration and tool transport
+- fastmcp (3.0.0+) - MCP server registration and tool transport
 - tree-sitter-python, tree-sitter-javascript, tree-sitter-typescript, tree-sitter-go, tree-sitter-rust, tree-sitter-java, tree-sitter-c, tree-sitter-cpp, tree-sitter-ruby
 ## Configuration
 - No explicit environment variables required for normal operation

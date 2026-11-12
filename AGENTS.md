@@ -23,7 +23,7 @@ It exposes **23 tools** over MCP:
 | `detect_clones(file_path?, min_lines?)` | Duplicate/near-duplicate functions | `Clone group 1 (2 functions, 12 lines each):` |
 | `search_symbols(query?, type?, parent?, ..., format?)` | Flexible symbol search; `format="compact"` omits doc lines | `calc.py: class Calculator → line 1` |
 | `find_tests(file_path, symbol_name)` | Find test functions for a symbol | `test_calc.py: test_add() → line 3  (name match)` |
-| `index_status()` | Graph index freshness and stats | `{files: 42, symbols: 315, edges: 580}` |
+| `index_status()` | Indexing progress, graph freshness and stats (never blocks) | `{graph_exists, files, symbols, edges, last_indexed_at, status, files_discovered, files_indexed, index_ready, graph_ready, startup_seconds?, error?}` |
 | `get_repository_map(max_items?)` | Compact repo overview for onboarding | `{languages: {py: 20}, hotspots: [...], start_here: [...]}` |
 | `resolve_symbol(query, kind?, path_hint?)` | Disambiguate short name into qualified matches | `calc.py::Calculator.add → line 11` |
 | `search_graph(query?, kind?, file_pattern?)` | Graph search with degree filters and pagination | `{total: 5, results: [...]}` |
@@ -60,7 +60,7 @@ All `file_path` arguments are **relative to the repo root** (e.g., `"src/main.py
 # Activate venv (required before all commands)
 source .venv/bin/activate
 
-# Run all tests (~1058 tests, ~35s)
+# Run all tests (~1200 tests, ~20s)
 pytest
 
 # Run a single test file
@@ -91,7 +91,8 @@ MCP tool call → server.py → indexer.py → FileEntry.plugin → tree-sitter 
 
 | File | Responsibility |
 |---|---|
-| `server.py` | FastMCP 3.1.0 server — defines all 23 tools, wires cache + indexer + graph at startup. Language-unaware. |
+| `server.py` | FastMCP 3.1.0 server — defines all 23 tools; each tool asks `IndexState` for the data it needs (single-file → on-demand parse, repo-wide → full index, graph → SQLite graph). Language-unaware. |
+| `index_state.py` | `IndexState` — owns the index lifecycle: discovery → indexing (skeleton cache) → graph build, in a background thread when run as `codetree` (`create_server(root, background=True)`), synchronously by default (tests). Exposes `files_ready`/`index_ready`/`graph_ready` events, bounded waits (`WAIT_TIMEOUT`, env `CODETREE_WAIT_TIMEOUT`), progress and errors for `index_status`. Exposed to tests as `mcp._codetree_state`. |
 | `indexer.py` | Discovers files, stores a `FileEntry` per file (with its plugin + `has_errors` flag), routes all queries through the stored plugin. Builds a definition index and lazy call graph for dead code, blast radius, and clone detection. Discovers files with `git ls-files` (tracked files always; untracked non-ignored files minus `SKIP_DIRS`; nested worktrees/repos/submodules excluded), falling back to an `os.walk` that prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, etc.) and nested worktrees. |
 | `cache.py` | `.codetree/index.json` — stores pre-computed skeletons with mtime-based invalidation. Language-unaware. |
 | `registry.py` | Maps file extensions → plugin instances. The **only** place languages are registered. |
@@ -144,6 +145,7 @@ Each plugin implements:
 | `test_indexer.py` | Build, skip-dirs, skeleton/symbol/refs/callgraph through indexer layer |
 | `test_file_discovery.py` | git-based discovery (.gitignore, nested worktrees/repos, submodules), walk fallback, stale cache entries |
 | `test_parse_cache.py` | Memoized query compilation and per-thread parse-tree cache |
+| `test_async_startup.py` | Background indexing: non-blocking startup, on-demand single-file tools, "still building" messages, failure handling |
 | `test_cache.py` | Cache load/save/invalidation |
 | `tests/languages/test_<lang>.py` | Per-language core tests |
 | `tests/languages/test_<lang>_comprehensive.py` | Exhaustive code pattern coverage per language |
@@ -206,6 +208,6 @@ The tree-sitter Python bindings have breaking changes from older docs:
 - Plugin classes: `{Lang}Plugin` (e.g., `PythonPlugin`, `GoPlugin`)
 - Module-level parser/language globals: `_PARSER`, `_LANGUAGE`
 - Skeleton results are deduplicated by `(name, line)` and sorted by line number
-- File discovery: in a git work tree, tracked files (`git ls-files --cached`) are always indexed — `.gitignore` decides, so a tracked `build/` or `env/` is indexed — while untracked non-ignored files (`--others --exclude-standard`) also skip `SKIP_DIRS`, so an un-ignored `.venv`/`node_modules` is never crawled. Nested worktrees such as `.claude/worktrees/`, nested repos and submodules never leak in, and `.codetree/` is always excluded. Outside git (no repo, git missing or refusing the repo, root ignored), the walk prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, …) and directories whose `.git` is a file (worktrees, submodules) — without this, crawling `.venv` causes Codex timeout. Only discovered files are re-injected from the cache.
+- File discovery: in a git work tree, tracked files (`git ls-files --cached`) are always indexed — `.gitignore` decides, so a tracked `build/` or `env/` is indexed — while untracked non-ignored files (`--others --exclude-standard`) also skip `SKIP_DIRS`, so an un-ignored `.venv`/`node_modules` is never crawled. Nested worktrees such as `.claude/worktrees/`, nested repos and submodules never leak in, and `.codetree/` is always excluded. Outside git (no repo, git missing or refusing the repo, root ignored), the walk prunes `SKIP_DIRS` (`.venv`, `node_modules`, `__pycache__`, `.git`, …) and directories whose `.git` is a file (worktrees, submodules) — without this, crawling `.venv` causes Codex timeout. Only discovered files are re-injected from the cache, which also stores each file's `has_errors` flag.
 - FastMCP tool access in tests: `mcp.local_provider._components[f"tool:{name}@"].fn`
 - **Doc sync rule**: When tools are added, removed, or changed, update all 5 doc files: `README.md`, `TOOLS_GUIDE.md`, `LANDING_PAGE.md`, `CLAUDE.md`, `AGENTS.md`

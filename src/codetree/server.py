@@ -1,10 +1,18 @@
+import atexit
 from fastmcp import FastMCP
 from pathlib import Path
-from .indexer import Indexer
-from .cache import Cache
+from .index_state import IndexState
 
 
-def create_server(root: str) -> FastMCP:
+def create_server(root: str, background: bool = False) -> FastMCP:
+    """Create the codetree MCP server for the repository at root.
+
+    Args:
+        root: repository root
+        background: index in a background thread so the server can answer the
+            MCP handshake immediately (used by `codetree`). When False (default,
+            used by tests and embedding), indexing completes before returning.
+    """
     mcp = FastMCP("codetree")
     root_path = Path(root)
 
@@ -22,56 +30,17 @@ def create_server(root: str) -> FastMCP:
         except ValueError:
             return f"Error: path '{file_path}' is outside the repo root — access denied"
 
-    # Load cache
-    cache = Cache(root)
-    cache.load()
-
-    # Build index, skipping unchanged files
-    cached_mtimes = {
-        k: v["mtime"] for k, v in (cache._data or {}).items()
-    }
-    indexer = Indexer(root)
-    indexer.build(cached_mtimes=cached_mtimes)
-
-    # Inject cached entries for unchanged files. Only files discovered by this
-    # build qualify, so stale cache entries (deleted or now-ignored files,
-    # e.g. old worktrees) are never resurrected.
-    for rel_path in indexer.cached_candidates:
-        py_file = root_path / rel_path
-        mtime = py_file.stat().st_mtime
-        if cache.is_valid(rel_path, mtime):
-            indexer.inject_cached(
-                rel_path=rel_path,
-                py_file=py_file,
-                source=py_file.read_bytes(),
-                skeleton=cache.get(rel_path).get("skeleton", []),
-                mtime=mtime,
-            )
-
-    # Rebuild definition index once after all injections (DATA-01, DATA-02, DATA-03 fix)
-    indexer._rebuild_definitions()
-
-    # Save updated cache — rebuilt from the index so stale entries are dropped
-    cache._data = {}
-    for rel_path, file_entry in indexer._index.items():
-        cache.set(rel_path, {
-            "mtime": file_entry.mtime,
-            "skeleton": file_entry.skeleton,
-        })
-    cache.save()
-
-    # ── Build persistent graph ───────────────────────────────────────────
-    import atexit
-    from .graph.store import GraphStore
-    from .graph.builder import GraphBuilder
-    from .graph.queries import GraphQueries
-
-    graph_store = GraphStore(root)
-    graph_store.open()
-    atexit.register(graph_store.close)
-    graph_builder = GraphBuilder(root, graph_store)
-    graph_builder.build(indexer=indexer)
-    graph_queries = GraphQueries(graph_store)
+    # Index + graph lifecycle. In background mode tools wait (bounded) for the
+    # data they need instead of blocking server startup.
+    state = IndexState(root)
+    # Register the store only: a reference to state would pin the whole index.
+    atexit.register(state.graph_store.close)
+    if background:
+        state.start_background()
+    else:
+        state.build(raise_errors=True)
+    mcp._codetree_state = state
+    graph_queries = state.graph_queries
 
     # ── Skeleton formatting helpers ──────────────────────────────────────────
     _TYPE_ABBREV = {
@@ -136,6 +105,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.indexer_for_files([file_path])
+        if indexer is None:
+            return state.not_ready_message()
         skeleton = indexer.get_skeleton(file_path)
         if not skeleton:
             return f"File not found or empty: {file_path}"
@@ -154,6 +126,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.indexer_for_files([file_path])
+        if indexer is None:
+            return state.not_ready_message()
         result = indexer.get_symbol(file_path, symbol_name)
         if result is None:
             return f"Symbol '{symbol_name}' not found in {file_path}"
@@ -168,6 +143,9 @@ def create_server(root: str) -> FastMCP:
             symbol_name: name of the symbol to search for; results include
                 file paths relative to the repo root (e.g., "src/main.py")
         """
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         refs = indexer.find_references(symbol_name)
         if not refs:
             return f"No references found for '{symbol_name}'"
@@ -190,6 +168,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         graph = indexer.get_call_graph(file_path, function_name)
         lines = [f"Call graph for '{function_name}':"]
 
@@ -218,6 +199,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.indexer_for_files([file_path])
+        if indexer is None:
+            return state.not_ready_message()
         entry = indexer._index.get(file_path)
         if entry is None:
             return f"File not found: {file_path}"
@@ -239,6 +223,9 @@ def create_server(root: str) -> FastMCP:
         """
         if not file_paths:
             return "No files requested."
+        indexer = state.indexer_for_files(file_paths)
+        if indexer is None:
+            return state.not_ready_message()
         parts = []
         for fp in file_paths:
             parts.append(f"=== {fp} ===")
@@ -266,6 +253,9 @@ def create_server(root: str) -> FastMCP:
         """
         if not symbols:
             return "No symbols requested."
+        indexer = state.indexer_for_files([item.get("file_path", "") for item in symbols])
+        if indexer is None:
+            return state.not_ready_message()
         parts = []
         for item in symbols:
             fp = item.get("file_path", "")
@@ -293,6 +283,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.indexer_for_files([file_path])
+        if indexer is None:
+            return state.not_ready_message()
         entry = indexer._index.get(file_path)
         if entry is None:
             return f"File not found: {file_path}"
@@ -316,6 +309,9 @@ def create_server(root: str) -> FastMCP:
         if file_path is not None:
             if err := _validate_path(file_path):
                 return err
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         if file_path and file_path not in indexer._index:
             return f"File not found: {file_path}"
         dead = indexer.find_dead_code(file_path=file_path)
@@ -348,6 +344,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         if file_path not in indexer._index:
             return f"File not found: {file_path}"
         result = indexer.get_blast_radius(file_path, symbol_name)
@@ -392,6 +391,9 @@ def create_server(root: str) -> FastMCP:
         if file_path is not None:
             if err := _validate_path(file_path):
                 return err
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         clones = indexer.detect_clones(file_path=file_path, min_lines=min_lines)
         if not clones:
             scope = file_path if file_path else "the repo"
@@ -427,6 +429,9 @@ def create_server(root: str) -> FastMCP:
             language: filter by file extension without dot (e.g., "py", "js", "go")
             format: "full" (default) or "compact" (abbreviated)
         """
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         results = indexer.search_symbols(
             query=query, type=type, parent=parent,
             has_doc=has_doc, min_complexity=min_complexity, language=language,
@@ -476,6 +481,9 @@ def create_server(root: str) -> FastMCP:
         """
         if err := _validate_path(file_path):
             return err
+        indexer = state.wait_for_index()
+        if indexer is None:
+            return state.not_ready_message()
         if file_path not in indexer._index:
             return f"File not found: {file_path}"
         tests = indexer.find_tests(file_path, symbol_name)
@@ -491,13 +499,15 @@ def create_server(root: str) -> FastMCP:
 
     @mcp.tool()
     def index_status() -> dict:
-        """Report on graph index freshness and stats."""
-        stats = graph_store.stats()
-        last = graph_store.get_meta("last_indexed_at")
+        """Report on index build progress, graph freshness and stats.
+
+        Never blocks: while the server is still indexing, "status" shows the
+        phase (discovering, indexing, building_graph) and file progress.
+        """
         return {
             "graph_exists": True,
-            **stats,
-            "last_indexed_at": last,
+            **state.graph_stats(),
+            **state.status(),
         }
 
     @mcp.tool()
@@ -510,6 +520,8 @@ def create_server(root: str) -> FastMCP:
         Args:
             max_items: maximum items per section (default 5)
         """
+        if not state.wait_for_graph():
+            return {"error": state.not_ready_message("graph")}
         return graph_queries.repository_map(max_items=max_items)
 
     @mcp.tool()
@@ -526,6 +538,8 @@ def create_server(root: str) -> FastMCP:
             path_hint: prefer results from files matching this path
             limit: max results (default 10)
         """
+        if not state.wait_for_graph():
+            return {"error": state.not_ready_message("graph")}
         results = graph_queries.resolve_symbol(query, kind=kind, path_hint=path_hint, limit=limit)
         return {
             "query": query,
@@ -560,6 +574,8 @@ def create_server(root: str) -> FastMCP:
             limit: max results per page (default 10)
             offset: pagination offset (default 0)
         """
+        if not state.wait_for_graph():
+            return {"error": state.not_ready_message("graph")}
         return graph_queries.search_graph(
             query=query, kind=kind, file_pattern=file_pattern,
             relationship=relationship, direction=direction,
@@ -579,6 +595,8 @@ def create_server(root: str) -> FastMCP:
             diff_scope: "working" (uncommitted), "staged", or "HEAD~1" for git-based analysis
             depth: max hop depth (default 3)
         """
+        if not state.wait_for_graph():
+            return {"error": state.not_ready_message("graph")}
         return graph_queries.change_impact(
             symbol_query=symbol_query,
             diff_scope=diff_scope,
@@ -606,10 +624,16 @@ def create_server(root: str) -> FastMCP:
             return {"error": err}
 
         if mode == "cross_taint":
+            indexer = state.wait_for_index()
+            if indexer is None:
+                return {"error": state.not_ready_message()}
             if file_path not in indexer._index:
                 return {"error": f"File not found: {file_path}"}
             return extract_cross_function_taint(indexer, file_path, function_name, depth=depth)
 
+        indexer = state.indexer_for_files([file_path])
+        if indexer is None:
+            return {"error": state.not_ready_message()}
         entry = indexer._index.get(file_path)
         if entry is None:
             return {"error": f"File not found: {file_path}"}
@@ -633,6 +657,9 @@ def create_server(root: str) -> FastMCP:
         Args:
             top_n: max results to return (default 10)
         """
+        if not state.wait_for_graph():
+            return state.not_ready_message("graph")
+        indexer = state.indexer
         results = graph_queries.find_hot_paths(indexer, top_n=top_n)
         if not results:
             return "No hot paths found (no functions with both callers and complexity)."
@@ -660,6 +687,8 @@ def create_server(root: str) -> FastMCP:
         if file_path is not None:
             if err := _validate_path(file_path):
                 return err
+        if not state.wait_for_graph():
+            return state.not_ready_message("graph")
         result = graph_queries.get_dependency_graph(file_path=file_path, format=format)
         summary = f"\n\n{result['nodes']} files, {result['edges']} import edges"
         return result["content"] + summary
@@ -740,6 +769,9 @@ def create_server(root: str) -> FastMCP:
         if file_path is not None:
             if err := _validate_path(file_path):
                 return err
+        if not state.wait_for_graph():
+            return state.not_ready_message("graph")
+        indexer = state.indexer
         results = graph_queries.suggest_docs(indexer, file_path=file_path, symbol_name=symbol_name)
         if not results:
             return "No undocumented functions found."
@@ -761,5 +793,5 @@ def create_server(root: str) -> FastMCP:
 
 
 def run(root: str):
-    mcp = create_server(root)
+    mcp = create_server(root, background=True)
     mcp.run()

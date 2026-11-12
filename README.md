@@ -115,7 +115,7 @@ The agent sees every class, method, and docstring — with line numbers — with
 
 | Tool | Purpose |
 |------|---------|
-| `index_status()` | Graph index freshness and stats |
+| `index_status()` | Indexing progress, graph freshness and stats (never blocks) |
 | `get_repository_map(max_items?)` | Compact repo overview: languages, entry points, hotspots |
 | `resolve_symbol(query, kind?, path_hint?)` | Disambiguate short name into ranked qualified matches |
 | `search_graph(query?, kind?, file_pattern?)` | Graph search with degree filters and pagination |
@@ -251,6 +251,11 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   `node_modules`, `__pycache__`, `.git`, `dist`, `build`, … and nested worktrees.
 - `.codetree/` (codetree's own cache) is never indexed.
 
+The MCP handshake is answered immediately and indexing runs in the background.
+Single-file tools answer right away; repo-wide and graph tools wait up to 20 s
+for the index (set `CODETREE_WAIT_TIMEOUT` to change it), then report progress.
+`index_status()` never blocks.
+
 ## Architecture
 
 ```
@@ -270,6 +275,7 @@ codetree server (FastMCP)
 | Module | Responsibility |
 |--------|---------------|
 | `server.py` | FastMCP server — defines all 23 tools |
+| `index_state.py` | Index lifecycle: background indexing, readiness, progress for `index_status` |
 | `indexer.py` | File discovery, plugin dispatch, definition index |
 | `cache.py` | Skeleton cache with mtime invalidation |
 | `registry.py` | Maps file extensions to language plugins |
@@ -298,7 +304,7 @@ source .venv/bin/activate
 pip install -e .
 pip install pytest
 
-# Run all tests (~1058 tests, ~35s)
+# Run all tests (~1200 tests, ~20s)
 pytest
 
 # Run a single test file

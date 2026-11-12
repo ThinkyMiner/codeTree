@@ -1,7 +1,9 @@
 import os
 import subprocess
+import threading
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Callable
 from .languages.base import LanguagePlugin
 from .registry import get_plugin
 
@@ -45,6 +47,7 @@ class Indexer:
         self._call_graph: dict[str, set[str]] = {}
         self._reverse_graph: dict[str, set[str]] = {}
         self._call_graph_built: bool = False
+        self._call_graph_lock = threading.Lock()
         # Rel paths in discovery order; _rebuild_definitions() orders _index by
         # it so results do not depend on which files came from the cache.
         self._discovery_order: list[str] = []
@@ -210,17 +213,26 @@ class Indexer:
             has_errors=has_errors,
         )
 
-    def build(self, cached_mtimes: dict[str, float] | None = None):
+    def build(self, cached_mtimes: dict[str, float] | None = None,
+              files: list[Path] | None = None,
+              progress: Callable[[int, int], None] | None = None):
         """Index all supported files under root, skipping non-project dirs.
 
         Files whose path+mtime appear in cached_mtimes are skipped;
         the caller injects them via inject_cached().
+
+        Args:
+            cached_mtimes: rel_path → mtime of entries the caller has cached
+            files: pre-discovered file list (defaults to discover_files())
+            progress: called as progress(done, total) after each file
         """
         cached_mtimes = cached_mtimes or {}
         self.cached_candidates = []
-        files = self.discover_files()
+        if files is None:
+            files = self.discover_files()
         self._discovery_order = [str(f.relative_to(self.root)) for f in files]
-        for candidate in files:
+        total = len(files)
+        for done, candidate in enumerate(files, start=1):
             rel = str(candidate.relative_to(self.root))
             try:
                 mtime = candidate.stat().st_mtime
@@ -232,12 +244,14 @@ class Indexer:
                 entry = self.index_file(candidate, mtime)
                 if entry is not None:
                     self._index[rel] = entry
+            if progress is not None:
+                progress(done, total)
 
         # Build definition index from skeleton data (qualified keys, no duplicates, no ghosts)
         self._rebuild_definitions()
 
     def inject_cached(self, rel_path: str, py_file: Path, source: bytes,
-                      skeleton: list[dict], mtime: float):
+                      skeleton: list[dict], mtime: float, has_errors: bool = False):
         """Inject a pre-computed entry (from cache) without re-parsing."""
         self._call_graph_built = False   # invalidate so graph is rebuilt with new entry
         plugin = get_plugin(py_file)
@@ -250,6 +264,7 @@ class Indexer:
             mtime=mtime,
             language=py_file.suffix.lstrip("."),
             plugin=plugin,
+            has_errors=has_errors,
         )
         # Note: _definitions is NOT updated here. After all inject_cached() calls
         # are complete, the caller must invoke _rebuild_definitions() to rebuild
@@ -282,11 +297,24 @@ class Indexer:
         return {"calls": calls, "callers": callers}
 
     def _ensure_call_graph(self):
-        """Build repo-wide call graph lazily on first use."""
+        """Build repo-wide call graph lazily on first use.
+
+        Tools run concurrently (FastMCP thread pool): the lock makes the first
+        callers build it once, and the graph is published only when complete.
+        """
         if self._call_graph_built:
             return
-        self._call_graph = {}
-        self._reverse_graph = {}
+        with self._call_graph_lock:
+            if self._call_graph_built:
+                return
+            call_graph, reverse_graph = self._compute_call_graph()
+            self._call_graph = call_graph
+            self._reverse_graph = reverse_graph
+            self._call_graph_built = True
+
+    def _compute_call_graph(self) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+        call_graph: dict[str, set[str]] = {}
+        reverse_graph: dict[str, set[str]] = {}
         for rel_path, entry in self._index.items():
             for item in entry.skeleton:
                 if item["type"] in ("function", "method"):
@@ -305,12 +333,12 @@ class Indexer:
                         else:
                             # External/unresolved — keep as bare name
                             callee_keys.add(f"?::{callee_name}")
-                    self._call_graph[caller_key] = callee_keys
+                    call_graph[caller_key] = callee_keys
                     for ck in callee_keys:
-                        if ck not in self._reverse_graph:
-                            self._reverse_graph[ck] = set()
-                        self._reverse_graph[ck].add(caller_key)
-        self._call_graph_built = True
+                        if ck not in reverse_graph:
+                            reverse_graph[ck] = set()
+                        reverse_graph[ck].add(caller_key)
+        return call_graph, reverse_graph
 
     def find_dead_code(self, file_path: str | None = None) -> list[dict]:
         """Find symbols that are defined but never referenced elsewhere.

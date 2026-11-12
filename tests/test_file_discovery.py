@@ -297,3 +297,29 @@ def test_index_order_does_not_depend_on_cache(tmp_path):
     assert list(second._index) == ["a.py", "b.py", "c.py", "d.py"]
     assert [r["file"] for r in second.find_references("target")] == ["a.py", "b.py", "c.py", "d.py"]
 
+
+def test_concurrent_cache_saves_never_fail_or_tear(tmp_path):
+    import threading
+    from codetree.cache import Cache
+
+    errors = []
+
+    def writer(tag):
+        cache = Cache(tmp_path)
+        cache.set("x.py", {"mtime": 1.0, "skeleton": [{"name": tag * 200}]})
+        try:
+            for _ in range(50):
+                cache.save()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(tag,)) for tag in "abcd"]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    data = json.loads((tmp_path / ".codetree" / "index.json").read_text())
+    assert data["x.py"]["mtime"] == 1.0
+    assert list((tmp_path / ".codetree").glob("*.tmp")) == []

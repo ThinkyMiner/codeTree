@@ -135,6 +135,17 @@ class TestEdgeCRUD:
         assert len(store.edges_from("my_file.py.bak::foo")) == 1
 
 
+class TestTransactions:
+    def test_rollback_discards_uncommitted_writes(self, store):
+        store.upsert_edge(Edge("kept.py::a", "x.py::b", "CALLS"))
+        store.begin()
+        store.upsert_edge(Edge("dropped.py::a", "x.py::b", "CALLS"))
+        store.rollback()
+        assert len(store.edges_from("kept.py::a")) == 1
+        assert store.edges_from("dropped.py::a") == []
+        assert store._in_transaction is False
+
+
 class TestFileCRUD:
     def test_upsert_and_get_file(self, store):
         store.upsert_file("calc.py", sha256="abc123", language="py", is_test=False)

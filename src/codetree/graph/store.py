@@ -93,6 +93,13 @@ class GraphStore:
                 self._conn.commit()
             self._in_transaction = False
 
+    def rollback(self):
+        """Discard the current transaction (e.g. after a failed build)."""
+        with self._lock:
+            if self._conn:
+                self._conn.rollback()
+            self._in_transaction = False
+
     def _auto_commit(self):
         """Commit unless inside an explicit transaction.
 

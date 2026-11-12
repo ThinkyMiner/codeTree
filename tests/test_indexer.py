@@ -338,3 +338,35 @@ class TestIndexerCallGraph:
         idx.build()
         graph = idx.get_call_graph("missing.py", "fn")
         assert graph["calls"] == []
+
+
+def test_concurrent_call_graph_requests_build_it_once(tmp_path, monkeypatch):
+    import threading
+    import time
+    from codetree.indexer import Indexer
+
+    (tmp_path / "a.py").write_text("def a():\n    b()\n\ndef b():\n    pass\n")
+    indexer = Indexer(tmp_path)
+    indexer.build()
+    builds = []
+    original = Indexer._compute_call_graph
+
+    def slow_compute(self):
+        builds.append(1)
+        time.sleep(0.2)
+        return original(self)
+
+    monkeypatch.setattr(Indexer, "_compute_call_graph", slow_compute)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(indexer.get_blast_radius("a.py", "b")))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert builds == [1]
+    assert all(r == results[0] for r in results)
+    assert any(c["name"] == "a" for c in results[0]["callers"])

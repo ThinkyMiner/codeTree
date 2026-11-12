@@ -37,3 +37,19 @@ def test_cache_creates_directory_if_missing(tmp_path):
     cache = Cache(tmp_path)
     cache.save()
     assert cache_dir.exists()
+
+
+def test_cache_file_is_world_readable_like_before(tmp_path):
+    import os
+    import stat
+    from codetree.cache import Cache
+
+    cache = Cache(tmp_path)
+    cache.set("a.py", {"mtime": 1.0, "skeleton": []})
+    cache.save()
+    cache_file = tmp_path / ".codetree" / "index.json"
+    assert stat.S_IMODE(cache_file.stat().st_mode) == 0o644
+
+    os.chmod(cache_file, 0o600)  # a user's explicit choice is kept
+    cache.save()
+    assert stat.S_IMODE(cache_file.stat().st_mode) == 0o600

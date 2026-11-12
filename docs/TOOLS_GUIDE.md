@@ -299,7 +299,7 @@ Found 3 tests
 
 ### 14. `index_status()`
 
-Is the graph up to date?
+Is the graph up to date — and is the server still indexing?
 
 ```
 Agent: index_status()
@@ -310,9 +310,27 @@ Returns:
   "files": 42,
   "symbols": 315,
   "edges": 580,
-  "last_indexed_at": "1741622400.0"
+  "last_indexed_at": "1741622400.0",
+  "status": "ready",
+  "files_discovered": 42,
+  "files_indexed": 42,
+  "index_ready": true,
+  "graph_ready": true,
+  "startup_seconds": 0.8
 }
 ```
+
+The server indexes in the background, so this tool never blocks. While it is
+still working, `status` is `starting`, `discovering`, `indexing` (with
+`files_indexed` / `files_discovered` progress) or `building_graph`; it ends as
+`ready`, or `error` with an `error` message if indexing or the graph build
+failed. While a graph rebuild runs, `files` / `symbols` / `edges` /
+`last_indexed_at` describe the last committed graph. Single-file tools
+(`get_file_skeleton`, `get_symbol`, `get_imports`, `get_skeletons`,
+`get_symbols`, `get_complexity`, `analyze_dataflow` flow/taint) answer
+immediately; repo-wide and graph tools wait up to 20 s (`CODETREE_WAIT_TIMEOUT`
+to change it), then return a "still building" message — retry, or poll
+`index_status`.
 
 ---
 

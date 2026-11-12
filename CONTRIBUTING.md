@@ -11,7 +11,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest
-pytest  # 999 tests, ~30s
+pytest  # ~1200 tests, ~20s
 ```
 
 ## What to work on
