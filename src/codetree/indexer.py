@@ -1,11 +1,39 @@
 import os
 import subprocess
 import threading
+from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 from .languages.base import LanguagePlugin
 from .registry import get_plugin
+
+
+def exclude_prefixes(root: str | Path, excludes: Iterable[str]) -> list[tuple[str, ...]]:
+    """Normalize --exclude values to path parts relative to root.
+
+    A value that could never match an indexed path is an error, not a no-op.
+
+    Raises:
+        ValueError: a value outside root, empty, or containing '..'.
+    """
+    root = Path(root)
+    prefixes = []
+    for exclude in excludes:
+        path = Path(exclude)
+        if path.is_absolute():
+            try:
+                path = path.relative_to(root)
+            except ValueError:
+                raise ValueError(
+                    f"--exclude '{exclude}' is outside the repo root '{root}'"
+                ) from None
+        if not path.parts or ".." in path.parts:
+            raise ValueError(
+                f"--exclude '{exclude}' must name a path below the repo root, without '..'"
+            )
+        prefixes.append(path.parts)
+    return prefixes
 
 
 @dataclass
@@ -36,8 +64,10 @@ class Indexer:
         "setup", "teardown", "setUp", "tearDown",
     }
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, exclude: Iterable[str] = ()):
         self.root = Path(root)
+        # Root-relative path prefixes left out of discovery, tracked or not.
+        self._exclude = exclude_prefixes(self.root, exclude)
         self._index: dict[str, FileEntry] = {}
         self._definitions: dict[str, list[tuple[str, int]]] = {}
         # Keys are "rel_path::symbol_name" to prevent name collisions across files.
@@ -147,6 +177,8 @@ class Indexer:
                 continue
             rel = candidate.relative_to(self.root)
             if rel.parts and rel.parts[0] == ".codetree":
+                continue
+            if any(rel.parts[:len(prefix)] == prefix for prefix in self._exclude):
                 continue
             if apply_skip_dirs and self._should_skip(rel):
                 continue

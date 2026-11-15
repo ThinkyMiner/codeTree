@@ -65,3 +65,77 @@ def test_plugin_results_unchanged_when_calls_hit_cache():
     assert plugin.extract_calls_in_function(source, "b") == ["c"]
     assert plugin.extract_calls_in_function(source, "c") == []
     assert [item["name"] for item in plugin.extract_skeleton(source)] == ["a", "b", "c"]
+
+
+_JS_SOURCE = b"""
+function foo() { fromDeclaration(); }
+const arrow = () => { fromArrow(); };
+class Widget {
+  foo() { fromMethod(); }
+  render() { fromRender(); }
+}
+"""
+
+
+def _fresh_definition_maps(monkeypatch):
+    monkeypatch.setattr(base, "_DEFINITIONS_LOCAL", threading.local())
+
+
+def test_js_call_lookups_scan_the_tree_once_per_pattern(monkeypatch):
+    from codetree.languages.javascript import JavaScriptPlugin, _CALLABLE_PATTERNS
+
+    _fresh_definition_maps(monkeypatch)
+    root_scans = []
+    real_matches = base._matches
+
+    def counting_matches(query, node):
+        root_scans.append(node)
+        return real_matches(query, node)
+
+    monkeypatch.setattr(base, "_matches", counting_matches)
+    plugin = JavaScriptPlugin()
+    for name in ("foo", "arrow", "render", "missing"):
+        plugin.extract_calls_in_function(_JS_SOURCE, name)
+    assert len(root_scans) == len(_CALLABLE_PATTERNS)
+
+
+def test_js_call_lookup_keeps_first_definition_order():
+    from codetree.languages.javascript import JavaScriptPlugin
+
+    plugin = JavaScriptPlugin()
+    # A declaration shadows a same-named method, as the per-name scan did.
+    assert plugin.extract_calls_in_function(_JS_SOURCE, "foo") == ["fromDeclaration"]
+    assert plugin.extract_calls_in_function(_JS_SOURCE, "arrow") == ["fromArrow"]
+    assert plugin.extract_calls_in_function(_JS_SOURCE, "render") == ["fromRender"]
+    assert plugin.extract_calls_in_function(_JS_SOURCE, "missing") == []
+
+
+def test_definition_maps_are_bounded(monkeypatch):
+    from codetree.languages.javascript import JavaScriptPlugin
+
+    _fresh_definition_maps(monkeypatch)
+    monkeypatch.setattr(base, "_DEFINITIONS_MAX", 2)
+    plugin = JavaScriptPlugin()
+    for index in range(5):
+        plugin.extract_calls_in_function(f"function f{index}() {{ g(); }}\n".encode(), f"f{index}")
+    assert len(base._DEFINITIONS_LOCAL.maps) == 2
+
+
+def test_python_call_lookups_scan_the_tree_once_per_pattern(monkeypatch):
+    from codetree.languages.python import _CALLABLE_PATTERNS
+
+    _fresh_definition_maps(monkeypatch)
+    root_scans = []
+    real_matches = base._matches
+
+    def counting_matches(query, node):
+        root_scans.append(node)
+        return real_matches(query, node)
+
+    monkeypatch.setattr(base, "_matches", counting_matches)
+    plugin = PythonPlugin()
+    source = b"@decorated\ndef a():\n    b()\n\ndef b():\n    c()\n\ndef c():\n    pass\n"
+    assert plugin.extract_calls_in_function(source, "a") == ["b"]
+    assert plugin.extract_calls_in_function(source, "b") == ["c"]
+    assert plugin.extract_calls_in_function(source, "missing") == []
+    assert len(root_scans) == len(_CALLABLE_PATTERNS)

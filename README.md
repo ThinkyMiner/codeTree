@@ -250,6 +250,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   repository, e.g. `safe.directory`): the tree is walked, skipping `.venv`,
   `node_modules`, `__pycache__`, `.git`, `dist`, `build`, … and nested worktrees.
 - `.codetree/` (codetree's own cache) is never indexed.
+- `--exclude PATH` (repeatable) leaves out a directory or file relative to the
+  root, tracked or not — vendored or generated code such as
+  `--exclude third_party --exclude static/js/chart.umd.js`. It scopes the index
+  only: `git_history` still reports every tracked file.
 
 The MCP handshake is answered immediately and indexing runs in the background.
 Single-file tools answer right away; repo-wide and graph tools wait up to 20 s

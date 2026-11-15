@@ -1,9 +1,15 @@
 from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
-from .base import LanguagePlugin, _matches, _clean_doc, _query, CachedParser
+from .base import LanguagePlugin, _matches, _clean_doc, _query, CachedParser, _definitions_by_name
 
 _LANGUAGE = Language(tspython.language())
 _PARSER = CachedParser(Parser(_LANGUAGE))
+
+# Definitions extract_calls_in_function can resolve a name to, in lookup order.
+_CALLABLE_PATTERNS = (
+    "(function_definition name: (identifier) @name) @def",
+    "(decorated_definition (function_definition name: (identifier) @name)) @def",
+)
 
 
 def _parse(source: bytes):
@@ -143,18 +149,7 @@ class PythonPlugin(LanguagePlugin):
 
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         tree = _parse(source)
-        fn_node = None
-        # Search plain and decorated function definitions
-        for q_str in [
-            "(function_definition name: (identifier) @name) @def",
-            "(decorated_definition (function_definition name: (identifier) @name)) @def",
-        ]:
-            for _, m in _matches(_query(_LANGUAGE, q_str), tree.root_node):
-                if m["name"].text.decode("utf-8", errors="replace") == fn_name:
-                    fn_node = m["def"]
-                    break
-            if fn_node is not None:
-                break
+        fn_node = _definitions_by_name(tree, _LANGUAGE, _CALLABLE_PATTERNS).get(fn_name)
         if fn_node is None:
             return []
         q = _query(_LANGUAGE, """
