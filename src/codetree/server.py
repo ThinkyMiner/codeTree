@@ -1,10 +1,11 @@
 import atexit
+from collections.abc import Iterable
 from fastmcp import FastMCP
 from pathlib import Path
 from .index_state import IndexState
 
 
-def create_server(root: str, background: bool = False) -> FastMCP:
+def create_server(root: str, background: bool = False, exclude: Iterable[str] = ()) -> FastMCP:
     """Create the codetree MCP server for the repository at root.
 
     Args:
@@ -12,6 +13,8 @@ def create_server(root: str, background: bool = False) -> FastMCP:
         background: index in a background thread so the server can answer the
             MCP handshake immediately (used by `codetree`). When False (default,
             used by tests and embedding), indexing completes before returning.
+        exclude: paths relative to root (or absolute, below it) left out of the
+            index, tracked or not. Raises ValueError for one that cannot match.
     """
     mcp = FastMCP("codetree")
     root_path = Path(root)
@@ -32,7 +35,7 @@ def create_server(root: str, background: bool = False) -> FastMCP:
 
     # Index + graph lifecycle. In background mode tools wait (bounded) for the
     # data they need instead of blocking server startup.
-    state = IndexState(root)
+    state = IndexState(root, exclude=exclude)
     # Register the store only: a reference to state would pin the whole index.
     atexit.register(state.graph_store.close)
     if background:
@@ -792,6 +795,6 @@ def create_server(root: str, background: bool = False) -> FastMCP:
     return mcp
 
 
-def run(root: str):
-    mcp = create_server(root, background=True)
+def run(root: str, exclude: Iterable[str] = ()):
+    mcp = create_server(root, background=True, exclude=exclude)
     mcp.run()

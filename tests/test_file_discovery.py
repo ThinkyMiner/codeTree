@@ -34,6 +34,20 @@ def _make_repo(path: Path) -> Path:
 
 # ── Git mode ─────────────────────────────────────────────────────────────────
 
+def test_excluded_tracked_files_are_not_indexed(tmp_path):
+    repo = _make_repo(tmp_path / "repo")
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "bundle.js").write_text("function vendored() {}\n")
+    (repo / "vendor" / "lib.py").write_text("def vendored():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "vendor")
+
+    indexer = Indexer(repo, exclude=["vendor"])
+    indexer.build()
+
+    assert _rel_files(indexer) == {"app.py"}
+
+
 def test_gitignored_files_are_not_indexed(tmp_path):
     repo = _make_repo(tmp_path / "repo")
     (repo / ".gitignore").write_text("generated/\ntmp_*.py\n")

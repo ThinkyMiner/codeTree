@@ -15,13 +15,14 @@ Every event is set even when a phase fails, so waiters never hang; they check
 import os
 import threading
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 from .cache import Cache
 from .graph.builder import GraphBuilder
 from .graph.queries import GraphQueries
 from .graph.store import GraphStore
-from .indexer import Indexer
+from .indexer import Indexer, exclude_prefixes
 
 
 
@@ -38,8 +39,10 @@ WAIT_TIMEOUT = _wait_timeout_from_env()
 
 
 class IndexState:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, exclude: Iterable[str] = ()):
         self.root = Path(root)
+        self.exclude = tuple(exclude)
+        exclude_prefixes(self.root, self.exclude)  # fail fast, before any thread starts
         self.indexer: Indexer | None = None
         self.graph_store = GraphStore(str(self.root))
         self.graph_store.open()
@@ -116,7 +119,7 @@ class IndexState:
         cache = Cache(self.root)
         cache.load()
 
-        indexer = Indexer(self.root)
+        indexer = Indexer(self.root, exclude=self.exclude)
         files = indexer.discover_files()
         self._discovered = {str(f.relative_to(self.root)) for f in files}
         self.files_total = len(files)
@@ -205,7 +208,7 @@ class IndexState:
             return None
         if self.index_ready.is_set():
             return self.indexer
-        partial = Indexer(self.root)
+        partial = Indexer(self.root, exclude=self.exclude)
         for rel_path in dict.fromkeys(rel_paths):
             if rel_path not in self._discovered:
                 continue
