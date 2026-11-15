@@ -112,7 +112,7 @@ MCP tool call → server.py → indexer.py → FileEntry.plugin → tree-sitter 
 
 | File | Responsibility |
 |---|---|
-| `base.py` | `LanguagePlugin` ABC with 5 abstract methods + `check_syntax()`, `compute_complexity()`, `normalize_source_for_clones()`, `get_ast_sexp()` defaults + shared `_matches()`, `_clean_doc()`, `_fill_docs_from_siblings()` helpers |
+| `base.py` | `LanguagePlugin` ABC with 5 abstract methods + `check_syntax()`, `compute_complexity()`, `normalize_source_for_clones()`, `get_ast_sexp()` defaults + shared `_matches()`, `_clean_doc()`, `_fill_docs_from_siblings()`, `_definitions_by_name()` helpers |
 | `python.py` | PythonPlugin |
 | `javascript.py` | JavaScriptPlugin (also provides `_arrow_params()` used by TS) |
 | `typescript.py` | TypeScriptPlugin + TSXPlugin |

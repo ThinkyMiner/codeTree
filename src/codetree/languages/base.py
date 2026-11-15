@@ -122,6 +122,41 @@ def _matches(query: Query, node) -> list[tuple[int, dict]]:
     return result
 
 
+# Call extraction looks one function up by name, and the graph builder asks for
+# every function of a file in a row: scanning the whole tree for each of them is
+# quadratic in the file size (a 200 KB minified bundle took ~20 s). The name →
+# definition map is built once per tree instead, per thread like CachedParser's
+# trees, and bounded the same way.
+_DEFINITIONS_MAX = 4
+_DEFINITIONS_LOCAL = threading.local()
+
+
+def _definitions_by_name(tree, lang, patterns: tuple[str, ...]) -> dict:
+    """Map each name defined in ``tree`` to its definition node.
+
+    Every pattern captures ``@name`` and ``@def``. Patterns apply in order and
+    matches in document order; the first definition of a name wins, which is the
+    node a per-name scan over the same patterns returns. The map is memoized per
+    tree and keeps the tree alive, so its id() cannot be reused while cached.
+    """
+    maps = getattr(_DEFINITIONS_LOCAL, "maps", None)
+    if maps is None:
+        maps = _DEFINITIONS_LOCAL.maps = OrderedDict()
+    key = (id(tree), patterns)
+    hit = maps.get(key)
+    if hit is not None:
+        maps.move_to_end(key)
+        return hit[1]
+    definitions: dict = {}
+    for pattern in patterns:
+        for _, m in _matches(_query(lang, pattern), tree.root_node):
+            definitions.setdefault(m["name"].text.decode("utf-8", errors="replace"), m["def"])
+    maps[key] = (tree, definitions)
+    if len(maps) > _DEFINITIONS_MAX:
+        maps.popitem(last=False)
+    return definitions
+
+
 class LanguagePlugin(ABC):
     """Abstract base class for all language plugins.
 

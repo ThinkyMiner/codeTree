@@ -1,9 +1,27 @@
 from tree_sitter import Language, Parser
 import tree_sitter_javascript as tsjs
-from .base import LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser
+from .base import (
+    LanguagePlugin, _matches, _fill_docs_from_siblings, _query, CachedParser,
+    _definitions_by_name,
+)
 
 _LANGUAGE = Language(tsjs.language())
 _PARSER = CachedParser(Parser(_LANGUAGE))
+
+# Definitions extract_calls_in_function can resolve a name to, in lookup order.
+_CALLABLE_PATTERNS = (
+    # function_declaration and generator_function_declaration (plain and exported)
+    "(function_declaration name: (identifier) @name) @def",
+    "(generator_function_declaration name: (identifier) @name) @def",
+    "(export_statement (function_declaration name: (identifier) @name) @def)",
+    "(export_statement (generator_function_declaration name: (identifier) @name) @def)",
+    # const/let foo = () => {} (plain and exported)
+    """(variable_declarator
+        name: (identifier) @name
+        value: [(arrow_function) @def (function_expression) @def])""",
+    # Methods inside classes
+    "(method_definition name: (property_identifier) @name) @def",
+)
 
 
 def _parse(source: bytes):
@@ -223,44 +241,7 @@ class JavaScriptPlugin(LanguagePlugin):
     def extract_calls_in_function(self, source: bytes, fn_name: str) -> list[str]:
         lang = self._get_language()
         tree = self._get_parser().parse(source)
-        fn_node = None
-
-        # function_declaration and generator_function_declaration (plain and exported)
-        for q_str in [
-            "(function_declaration name: (identifier) @name) @def",
-            "(generator_function_declaration name: (identifier) @name) @def",
-            "(export_statement (function_declaration name: (identifier) @name) @def)",
-            "(export_statement (generator_function_declaration name: (identifier) @name) @def)",
-        ]:
-            for _, m in _matches(_query(lang, q_str), tree.root_node):
-                if m["name"].text.decode("utf-8", errors="replace") == fn_name:
-                    fn_node = m["def"]
-                    break
-            if fn_node:
-                break
-
-        # const/let foo = () => {} (plain and exported)
-        if fn_node is None:
-            for q_str in [
-                """(variable_declarator
-                    name: (identifier) @name
-                    value: [(arrow_function) @def (function_expression) @def])""",
-            ]:
-                for _, m in _matches(_query(lang, q_str), tree.root_node):
-                    if m["name"].text.decode("utf-8", errors="replace") == fn_name:
-                        fn_node = m["def"]
-                        break
-                if fn_node:
-                    break
-
-        # Methods inside classes
-        if fn_node is None:
-            q = _query(lang, "(method_definition name: (property_identifier) @name) @def")
-            for _, m in _matches(q, tree.root_node):
-                if m["name"].text.decode("utf-8", errors="replace") == fn_name:
-                    fn_node = m["def"]
-                    break
-
+        fn_node = _definitions_by_name(tree, lang, _CALLABLE_PATTERNS).get(fn_name)
         if fn_node is None:
             return []
 
