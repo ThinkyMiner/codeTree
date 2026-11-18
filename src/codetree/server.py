@@ -60,11 +60,11 @@ def create_server(root: str, background: bool = False) -> FastMCP:
             lines.append("WARNING: File has syntax errors — skeleton may be incomplete\n")
         for item in skeleton:
             kind = item["type"]
+            prefix = "  " if item["parent"] else ""
+            parent_info = f" (in {item['parent']})" if item["parent"] else ""
             if kind in ("class", "struct", "interface", "trait", "enum", "type", "actor"):
-                lines.append(f"{kind} {item['name']} → line {item['line']}")
+                lines.append(f"{prefix}{kind} {item['name']}{parent_info} → line {item['line']}")
             else:
-                prefix = "  " if item["parent"] else ""
-                parent_info = f" (in {item['parent']})" if item["parent"] else ""
                 lines.append(f"{prefix}def {item['name']}{item['params']}{parent_info} → line {item['line']}")
             doc = item.get("doc", "")
             if doc:

@@ -42,6 +42,16 @@ actor Worker {
     func run() {}
 }
 """)
+    (tmp_path / "CardView.swift").write_text("""\
+typealias Handler = (Int) -> Void
+struct CardView {
+    typealias ViewModel = CardViewModel
+    var body: some View { Text("") }
+}
+extension CardView {
+    typealias ElementType = Elements.Card
+}
+""")
     return tmp_path
 
 
@@ -77,6 +87,18 @@ def test_skeleton_shows_swift_actor(extended_repo):
     fn = mcp.local_provider._components["tool:get_file_skeleton@"].fn
     assert fn(file_path="Worker.swift") == "actor Worker → line 1\n  def run() (in Worker) → line 2"
     assert fn(file_path="Worker.swift", format="compact") == "act Worker:1\n.run():2"
+
+
+def test_skeleton_shows_parent_of_nested_types(extended_repo):
+    mcp = create_server(str(extended_repo))
+    fn = mcp.local_provider._components["tool:get_file_skeleton@"].fn
+    assert fn(file_path="CardView.swift") == "\n".join([
+        "type Handler → line 1",
+        "struct CardView → line 2",
+        "  type ViewModel (in CardView) → line 3",
+        "  def body (in CardView) → line 4",
+        "  type ElementType (in CardView) → line 7",
+    ])
 
 
 def test_get_symbol_rust_trait(extended_repo):

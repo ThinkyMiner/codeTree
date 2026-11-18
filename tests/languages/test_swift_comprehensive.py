@@ -74,6 +74,30 @@ extension Square: Shape {
     assert _item(result, "Unit")["parent"] == "Square"
 
 
+def test_typealias_and_nested_types_have_parent():
+    src = b"""\
+typealias Handler = (Int) -> Void
+struct CardView {
+    typealias ViewModel = CardViewModel
+    struct Style {}
+}
+extension CardView {
+    typealias ElementType = Elements.Card
+    enum Mode { case compact }
+}
+"""
+    result = [(x["type"], x["name"], x["parent"]) for x in P.extract_skeleton(src)]
+    assert result == [
+        ("type", "Handler", None),
+        ("struct", "CardView", None),
+        ("type", "ViewModel", "CardView"),
+        ("struct", "Style", "CardView"),
+        ("type", "ElementType", "CardView"),
+        ("enum", "Mode", "CardView"),
+        ("case", "compact", "Mode"),
+    ]
+
+
 def test_extension_of_nested_type_uses_last_component():
     src = b"extension Outer.Inner {\n    func go() {}\n}\n"
     result = P.extract_skeleton(src)
