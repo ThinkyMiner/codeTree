@@ -53,6 +53,7 @@ All `file_path` arguments are **relative to the repo root** (e.g., `"src/main.py
 | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh` | CppPlugin | `class_specifier`, `function_definition`, `struct_specifier`, `namespace_definition` |
 | `.rb` | RubyPlugin | `class`, `module`, `method`, `singleton_method` |
 | `.kt` | KotlinPlugin | `class_declaration`, `object_declaration`, `function_declaration` |
+| `.swift` | SwiftPlugin | `class_declaration` (class/struct/enum/extension/actor via `declaration_kind`), `protocol_declaration`, `function_declaration`, `init_declaration` |
 
 ## Commands
 
@@ -123,6 +124,7 @@ MCP tool call → server.py → indexer.py → FileEntry.plugin → tree-sitter 
 | `cpp.py` | CppPlugin (inherits CPlugin) |
 | `ruby.py` | RubyPlugin |
 | `kotlin.py` | KotlinPlugin |
+| `swift.py` | SwiftPlugin |
 | `_template.py` | Boilerplate for adding new languages |
 
 Each plugin implements:
