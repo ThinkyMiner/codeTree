@@ -45,7 +45,7 @@ def create_server(root: str, background: bool = False) -> FastMCP:
     # ── Skeleton formatting helpers ──────────────────────────────────────────
     _TYPE_ABBREV = {
         "class": "cls", "struct": "str", "interface": "ifc",
-        "trait": "trt", "enum": "enm", "type": "typ",
+        "trait": "trt", "enum": "enm", "type": "typ", "actor": "act",
         "function": "fn", "method": "mth",
     }
 
@@ -60,7 +60,7 @@ def create_server(root: str, background: bool = False) -> FastMCP:
             lines.append("WARNING: File has syntax errors — skeleton may be incomplete\n")
         for item in skeleton:
             kind = item["type"]
-            if kind in ("class", "struct", "interface", "trait", "enum", "type"):
+            if kind in ("class", "struct", "interface", "trait", "enum", "type", "actor"):
                 lines.append(f"{kind} {item['name']} → line {item['line']}")
             else:
                 prefix = "  " if item["parent"] else ""
@@ -69,7 +69,7 @@ def create_server(root: str, background: bool = False) -> FastMCP:
             doc = item.get("doc", "")
             if doc:
                 indent = "  " if item.get("parent") else ""
-                extra = "  " if kind not in ("class", "struct", "interface", "trait", "enum", "type") else ""
+                extra = "  " if kind not in ("class", "struct", "interface", "trait", "enum", "type", "actor") else ""
                 lines.append(f"{indent}{extra}\"{doc}\"")
         return "\n".join(lines)
 
@@ -83,7 +83,7 @@ def create_server(root: str, background: bool = False) -> FastMCP:
             doc = item.get("doc", "")
             doc_suffix = f" # {doc}" if doc else ""
 
-            if kind in ("class", "struct", "interface", "trait", "enum", "type"):
+            if kind in ("class", "struct", "interface", "trait", "enum", "type", "actor"):
                 lines.append(f"{abbrev} {name}:{line}{doc_suffix}")
             elif item.get("parent"):
                 # Method: dot prefix, strip param spaces

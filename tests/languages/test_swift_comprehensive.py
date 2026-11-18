@@ -32,37 +32,58 @@ typealias F = (Int) -> Void
 """
     kinds = {x["name"]: x["type"] for x in P.extract_skeleton(src)}
     assert kinds == {"A": "class", "B": "struct", "C": "enum", "x": "case",
-                     "D": "interface", "E": "class", "F": "type"}
+                     "D": "interface", "E": "actor", "F": "type"}
 
 
-def test_extension_named_after_extended_type():
+def test_type_declarations_and_extension():
+    src = b"""\
+class Foo { func a() {} }
+extension Foo: Equatable { func b() {} }
+struct Bar {}
+enum Baz { case x }
+protocol Qux {}
+actor Worker {}
+"""
+    result = [(x["type"], x["name"], x["line"], x["parent"]) for x in P.extract_skeleton(src)]
+    assert result == [
+        ("class", "Foo", 1, None),
+        ("method", "a", 1, "Foo"),
+        ("method", "b", 2, "Foo"),
+        ("struct", "Bar", 3, None),
+        ("enum", "Baz", 4, None),
+        ("case", "x", 4, "Baz"),
+        ("interface", "Qux", 5, None),
+        ("actor", "Worker", 6, None),
+    ]
+
+
+def test_extension_is_not_a_second_type():
+    # Like Rust `impl Foo`: the extension itself is not a symbol, its members are
     src = b"""\
 protocol Shape { func area() -> Double }
 struct Square { let side: Double }
 extension Square: Shape {
     func area() -> Double { side * side }
+    enum Unit { case cm }
 }
 """
     result = P.extract_skeleton(src)
-    ext = _item(result, "Square", line=3)
-    assert ext["type"] == "class"
-    assert ext["parent"] is None
+    assert [x["line"] for x in result if x["name"] == "Square"] == [2]
     assert _item(result, "area", line=4)["parent"] == "Square"
     assert _item(result, "area", line=1)["parent"] == "Shape"
+    assert _item(result, "Unit")["parent"] == "Square"
 
 
 def test_extension_of_nested_type_uses_last_component():
     src = b"extension Outer.Inner {\n    func go() {}\n}\n"
     result = P.extract_skeleton(src)
-    assert _item(result, "Inner")["type"] == "class"
-    assert _item(result, "go")["parent"] == "Inner"
+    assert [(x["name"], x["parent"]) for x in result] == [("go", "Inner")]
 
 
 def test_generic_extension_with_where():
     src = b"extension Array where Element: Equatable {\n    func dedup() -> [Element] { [] }\n}\n"
     result = P.extract_skeleton(src)
-    assert _item(result, "Array")["line"] == 1
-    assert _item(result, "dedup")["parent"] == "Array"
+    assert [(x["name"], x["parent"]) for x in result] == [("dedup", "Array")]
 
 
 def test_enum_cases_with_associated_values():

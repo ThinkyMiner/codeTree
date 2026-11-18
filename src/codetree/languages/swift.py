@@ -7,8 +7,7 @@ _PARSER = CachedParser(Parser(_LANGUAGE))
 
 _TYPE_KINDS = {
     "class": "class",
-    "actor": "class",
-    "extension": "class",
+    "actor": "actor",
     "struct": "struct",
     "enum": "enum",
     "protocol": "interface",
@@ -143,7 +142,10 @@ class SwiftPlugin(LanguagePlugin):
                     if name_node is None:
                         continue
                     kind = node.child_by_field_name("declaration_kind")
-                    add(_TYPE_KINDS.get(_text(kind) if kind else "", "class"), name_node, node, parent)
+                    kind = _text(kind) if kind else ""
+                    # Like Rust `impl Foo`: an extension is not a symbol, its members are
+                    if kind != "extension":
+                        add(_TYPE_KINDS.get(kind, "class"), name_node, node, parent)
                     body = node.child_by_field_name("body")
                     if body is not None:
                         walk(body, _text(name_node), _inherits_test_case(node))

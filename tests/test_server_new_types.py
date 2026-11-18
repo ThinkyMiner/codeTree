@@ -37,6 +37,11 @@ class Circle implements Shape {
     area(): number { return 0; }
 }
 """)
+    (tmp_path / "Worker.swift").write_text("""\
+actor Worker {
+    func run() {}
+}
+""")
     return tmp_path
 
 
@@ -65,6 +70,13 @@ def test_skeleton_shows_ts_type_aliases(extended_repo):
     assert "type Result" in output
     assert "interface Shape" in output
     assert "class Circle" in output
+
+
+def test_skeleton_shows_swift_actor(extended_repo):
+    mcp = create_server(str(extended_repo))
+    fn = mcp.local_provider._components["tool:get_file_skeleton@"].fn
+    assert fn(file_path="Worker.swift") == "actor Worker → line 1\n  def run() (in Worker) → line 2"
+    assert fn(file_path="Worker.swift", format="compact") == "act Worker:1\n.run():2"
 
 
 def test_get_symbol_rust_trait(extended_repo):
