@@ -624,7 +624,8 @@ class Indexer:
                             rel_path.endswith(".spec.ts") or rel_path.endswith(".test.ts"))
 
             for item in entry.skeleton:
-                is_test_sym = (item["name"].startswith("test_") or
+                is_test_sym = (item.get("is_test", False) or
+                               item["name"].startswith("test_") or
                                item["name"].startswith("Test") or
                                item["name"].endswith("Test"))
                 if not is_test_sym and not is_spec_file and item["type"] != "class":

@@ -10,6 +10,7 @@ from .languages.c import CPlugin
 from .languages.cpp import CppPlugin
 from .languages.ruby import RubyPlugin
 from .languages.kotlin import KotlinPlugin
+from .languages.swift import SwiftPlugin
 
 # All supported file extensions mapped to plugin instances.
 # To add a new language: import its plugin and add its extensions here.
@@ -32,6 +33,7 @@ PLUGINS: dict[str, LanguagePlugin] = {
     ".rb":   RubyPlugin(),
     ".kt":   KotlinPlugin(),
     ".kts":  KotlinPlugin(),
+    ".swift": SwiftPlugin(),
 }
 
 
